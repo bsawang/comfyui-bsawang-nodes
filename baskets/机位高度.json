@@ -1,0 +1,17 @@
+{
+  "key": "机位高度",
+  "label": "机位高度",
+  "section": "content",
+  "type": "basket",
+  "order": 4,
+  "options": [
+    "平视",
+    "低角度",
+    "高角度",
+    "俯拍",
+    "仰拍",
+    "极低贴地视角",
+    "微距视角"
+  ],
+  "mutually_exclusive": true
+}

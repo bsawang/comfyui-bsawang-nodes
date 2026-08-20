@@ -1,0 +1,132 @@
+{
+  "sections": [
+    {
+      "id": "type",
+      "title": "类型选择",
+      "fields": [
+        {
+          "key": "任务类型",
+          "label": "任务类型",
+          "type": "combo",
+          "default": "文生图(T2I)",
+          "required": true,
+          "options": [
+            "文生图(T2I)",
+            "图生图(I2I)",
+            "文生视频(T2V)",
+            "图生视频(I2V)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type_info",
+      "title": "类型基础信息设置",
+      "fields": [
+        {
+          "key": "种子",
+          "label": "种子",
+          "type": "int",
+          "default": 0,
+          "min": 0,
+          "max": 2147483647,
+          "tooltip": "确定性种子：相同输入+相同种子 → 相同输出（需 API 支持 seed 参数；DeepSeek Anthropic 兼容接口若忽略则仅作控制重跑）",
+          "control_after_generate": true
+        },
+        {
+          "key": "视频时长",
+          "label": "视频时长",
+          "type": "float",
+          "default": 10.0,
+          "min": 1.0,
+          "max": 30.0,
+          "step": 0.5,
+          "condition": {
+            "任务类型": [
+              "文生视频(T2V)",
+              "图生视频(I2V)"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "content",
+      "title": "内容设置",
+      "fields": [
+        {
+          "key": "用户提示词",
+          "label": "用户提示词",
+          "type": "text",
+          "default": "",
+          "placeholder": "用户自由定制内容（LLM 自由发挥的入口），如：红发女剑客在竹林里"
+        },
+        {
+          "key": "用户提示词-2",
+          "label": "用户提示词-2（场景环境，可空）",
+          "type": "text",
+          "default": "",
+          "placeholder": "可选：具体场景/环境描述，如：漂浮在云海中的仙宫白玉台阶上"
+        }
+      ]
+    },
+    {
+      "id": "output",
+      "title": "输出设置",
+      "fields": [
+        {
+          "key": "输出格式",
+          "label": "输出格式",
+          "type": "combo",
+          "default": "自然语言",
+          "options": [
+            "自然语言",
+            "Tag",
+            "混合"
+          ]
+        },
+        {
+          "key": "输出结构",
+          "label": "输出结构",
+          "type": "combo",
+          "default": "连贯一段",
+          "options": [
+            "连贯一段",
+            "分段标题"
+          ]
+        },
+        {
+          "key": "输出语言",
+          "label": "输出语言",
+          "type": "combo",
+          "default": "中文",
+          "options": [
+            "中文",
+            "英文"
+          ]
+        },
+        {
+          "key": "输出长度",
+          "label": "输出长度",
+          "type": "combo",
+          "default": "标准",
+          "options": [
+            "简短",
+            "标准",
+            "详细"
+          ]
+        },
+        {
+          "key": "带负面提示词",
+          "label": "带负面提示词",
+          "type": "combo",
+          "default": "否",
+          "options": [
+            "否",
+            "是"
+          ]
+        }
+      ]
+    }
+  ]
+}

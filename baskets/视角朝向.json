@@ -1,0 +1,14 @@
+{
+  "key": "视角朝向",
+  "label": "视角朝向",
+  "section": "content",
+  "type": "basket",
+  "order": 5,
+  "options": [
+    "正面",
+    "3-4侧面",
+    "侧面",
+    "背面"
+  ],
+  "mutually_exclusive": true
+}

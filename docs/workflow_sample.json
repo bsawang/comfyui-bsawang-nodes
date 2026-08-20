@@ -1,0 +1,354 @@
+{
+  "id": "86406af7-f512-4854-8754-33b692cc78bf",
+  "revision": 0,
+  "last_node_id": 6,
+  "last_link_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LLM_API_Configurator",
+      "pos": [
+        -3480,
+        -850
+      ],
+      "size": [
+        380,
+        390
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LLM",
+          "type": "LLM_CONFIG",
+          "links": [
+            1,
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LLM_API_Configurator",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": [
+        "Anthropic 兼容",
+        "deepseek-v4-flash",
+        "https://api.deepseek.com/anthropic",
+        "ANTHROPIC_AUTH_TOKEN",
+        0.4,
+        8192,
+        "否"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "Seed (rgthree)",
+      "pos": [
+        -3480,
+        -400
+      ],
+      "size": [
+        380,
+        200
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "dir": 4,
+          "name": "SEED",
+          "shape": 3,
+          "type": "INT",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "rgthree-comfy",
+        "ver": "738105af5fb14e96fbecaf406dc356e284797e8c",
+        "randomMax": 1125899906842624,
+        "randomMin": 0,
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": [
+        748162978955653,
+        null,
+        "",
+        null
+      ]
+    },
+    {
+      "id": 3,
+      "type": "Prompt_Enhancer",
+      "pos": [
+        -3060,
+        -850
+      ],
+      "size": [
+        500,
+        730
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "LLM",
+          "type": "LLM_CONFIG",
+          "link": 1
+        },
+        {
+          "name": "参考图",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "种子",
+          "type": "INT",
+          "widget": {
+            "name": "种子"
+          },
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "提示词",
+          "type": "STRING",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "负面提示词",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Prompt_Enhancer",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": [
+        "文生图(T2I)",
+        0,
+        "randomize",
+        10,
+        "一个女孩",
+        "",
+        "是",
+        "自然语言",
+        "分段标题",
+        "中文",
+        "标准",
+        "{\"主题风格\":[\"仙侠\"],\"艺术风格\":[\"超写实(photorealistic)\"],\"景别\":[\"大远景\"],\"机位高度\":[\"高角度\"],\"人物姿势\":[\"站立\"],\"氛围情绪\":[\"浪漫\"],\"身材\":[\"曲线玲珑\"]}",
+        "H:\\ComfyUI_Windows_portable\\ComfyUI\\custom_nodes\\ComfyUI-bsawang\\prompt_enhancer_system.txt"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "PreviewAny",
+      "pos": [
+        -2520,
+        -840
+      ],
+      "size": [
+        520,
+        730
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.33.0",
+        "Node name for S&R": "PreviewAny",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 5,
+      "type": "H3_API_PromptFormatter",
+      "pos": [
+        -1970,
+        -830
+      ],
+      "size": [
+        490,
+        650
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "LLM",
+          "type": "LLM_CONFIG",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "提示词",
+          "type": "STRING",
+          "links": [
+            5
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "H3_API_PromptFormatter",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": [
+        "一男<Picture 1>一女<Picture 2>正在吵架",
+        "全参考模式(Reference to Video)",
+        10,
+        "H:\\ComfyUI_Windows_portable\\ComfyUI\\custom_nodes\\ComfyUI-bsawang\\h3_system_prompt.txt"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "PreviewAny",
+      "pos": [
+        -1450,
+        -820
+      ],
+      "size": [
+        520,
+        730
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.33.0",
+        "Node name for S&R": "PreviewAny",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": []
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      3,
+      0,
+      "LLM_CONFIG"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      2,
+      "INT"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      0,
+      "STRING"
+    ],
+    [
+      4,
+      1,
+      0,
+      5,
+      0,
+      "LLM_CONFIG"
+    ],
+    [
+      5,
+      5,
+      0,
+      6,
+      0,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ue_links": [],
+    "ds": {
+      "scale": 0.658845000000001,
+      "offset": [
+        3769.1348453782853,
+        1235.4328458544883
+      ]
+    },
+    "links_added_by_ue": [],
+    "frontendVersion": "1.48.7",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}
