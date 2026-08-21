@@ -25,6 +25,7 @@ from . import llm_usage
 NODE_DIR = Path(__file__).parent
 DICT_PATH = NODE_DIR / "dict.json"
 BASKETS_DIR = NODE_DIR / "baskets"
+PRESETS_DIR = NODE_DIR / "presets"
 TASKS_PATH = NODE_DIR / "tasks.json"
 
 
@@ -157,9 +158,174 @@ def _tasks_from_condition(condition):
 DICT = _get_dict()
 
 
+# ---------- 预设（presets/*.json） ----------
+
+_PRESET_CACHE = {"stamp": None, "data": None}
+
+
+def _presets_stamp():
+    if not PRESETS_DIR.is_dir():
+        return None
+    stamps = []
+    for p in sorted(PRESETS_DIR.glob("*.json")):
+        stamps.append((p.name, p.stat().st_mtime_ns))
+    return tuple(stamps)
+
+
+def _load_presets() -> dict:
+    """读取 presets/ 目录全部预设（mtime 缓存）：{key: {key,label,description,tags}}。"""
+    try:
+        stamp = _presets_stamp()
+    except OSError:
+        stamp = None
+    if _PRESET_CACHE["data"] is None or _PRESET_CACHE["stamp"] != stamp:
+        presets = {}
+        if PRESETS_DIR.is_dir():
+            for p in sorted(PRESETS_DIR.glob("*.json")):
+                try:
+                    d = json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                key = (d.get("key") or "").strip() or p.stem
+                presets[key] = {
+                    "key": key,
+                    "label": d.get("label", key),
+                    "guidance": d.get("guidance", ""),
+                    "tags": d.get("tags", {}) or {},
+                }
+        _PRESET_CACHE["data"] = presets
+        _PRESET_CACHE["stamp"] = stamp
+    return _PRESET_CACHE["data"]
+
+
+def _save_preset(name, tags, label=None, guidance=""):
+    """写 presets/{name}.json（同名幂等覆盖）。返回安全 key。"""
+    name = (name or "").strip().replace("/", "_").replace("\\", "_")
+    if not name:
+        raise ValueError("[Tag] 预设名不能为空")
+    data = {
+        "key": name,
+        "label": label or name,
+        "guidance": guidance or "",
+        "tags": tags or {},
+    }
+    PRESETS_DIR.mkdir(parents=True, exist_ok=True)
+    (PRESETS_DIR / f"{name}.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _PRESET_CACHE["data"] = None
+    return name
+
+
+def _delete_preset(name):
+    name = (name or "").strip().replace("/", "_").replace("\\", "_")
+    path = PRESETS_DIR / f"{name}.json"
+    if path.exists():
+        path.unlink()
+    _PRESET_CACHE["data"] = None
+    return True
+
+
+def _read_basket_file(basket):
+    """读 baskets/{basket}.json 原始文件（key 已与文件名一致）；不存在报错。"""
+    path = BASKETS_DIR / f"{basket}.json"
+    if not path.exists():
+        raise ValueError(f"[Tag] 篮子文件不存在：{path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_basket_file(basket, data):
+    """写回 baskets/{basket}.json + 失效字典缓存。"""
+    (BASKETS_DIR / f"{basket}.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _DICT_CACHE["data"] = None
+
+
+def _save_basket(key, label=None, guidance=None):
+    """创建或更新篮子 meta。key 已存在 → 改 label/guidance；不存在 → 新建（content section，空 options）。"""
+    key = (key or "").strip()
+    if not key:
+        raise ValueError("[Tag] 篮子 key 不能为空")
+    path = BASKETS_DIR / f"{key}.json"
+    if path.exists():
+        bf = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        bf = {
+            "key": key, "label": label or key, "section": "content", "type": "basket",
+            "options": [], "guidance": [], "option_guidance": {},
+        }
+    if label is not None:
+        bf["label"] = (label or key).strip() or key
+    if guidance is not None:
+        g = (guidance or "").strip()
+        bf["guidance"] = [g] if g else []
+    _write_basket_file(key, bf)
+    return key
+
+
+def _delete_basket(key):
+    """删 baskets/{key}.json。"""
+    key = (key or "").strip()
+    path = BASKETS_DIR / f"{key}.json"
+    if path.exists():
+        path.unlink()
+    _DICT_CACHE["data"] = None
+    return True
+
+
+def _save_option(basket, tag, guidance=None):
+    """在篮子 options 加/改一个 tag；guidance 写入 option_guidance[tag]（空则移除）。"""
+    basket = (basket or "").strip()
+    tag = (tag or "").strip()
+    if not basket or not tag:
+        raise ValueError("[Tag] 篮子/tag 不能为空")
+    bf = _read_basket_file(basket)
+    opts = bf.get("options", [])
+    if tag not in opts:
+        opts.append(tag)
+        bf["options"] = opts
+    og = bf.setdefault("option_guidance", {})
+    g = (guidance or "").strip()
+    if g:
+        og[tag] = g
+    else:
+        og.pop(tag, None)
+    _write_basket_file(basket, bf)
+    return True
+
+
+def _delete_option(basket, tag):
+    """从篮子 options 移除 tag + 对应 option_guidance。"""
+    basket = (basket or "").strip()
+    tag = (tag or "").strip()
+    if not basket:
+        raise ValueError("[Tag] 篮子不能为空")
+    bf = _read_basket_file(basket)
+    bf["options"] = [o for o in bf.get("options", []) if o != tag]
+    bf.get("option_guidance", {}).pop(tag, None)
+    _write_basket_file(basket, bf)
+    return True
+
+
+def _add_basket_option(basket, tag):
+    """往篮子 options 加 tag（去重）；basket 必须是已加载篮子（Tag_Reverse 采纳用）。"""
+    _save_option(basket, tag)
+    return True
+
+
+def _basket_options(basket):
+    """取某篮子已加载 options；不存在返回 None。"""
+    for section in _get_dict()["sections"]:
+        for f in section["fields"]:
+            if f.get("type") == "basket" and f.get("key") == basket:
+                return f.get("options", [])
+    return None
+
+
 def _load_default_system_prompt() -> str:
     try:
-        return (NODE_DIR / "prompt_enhancer_system.txt").read_text(encoding="utf-8")
+        return (NODE_DIR / "templates" / "常规文生图.txt").read_text(encoding="utf-8")
     except Exception:
         return (
             "你是专业的 AI 提示词增强专家。把用户输入的简单提示词，"
@@ -380,7 +546,7 @@ class Prompt_Enhancer:
         )
         required["系统提示词文件"] = (
             "STRING",
-            {"default": str(NODE_DIR / "prompt_enhancer_system.txt"), "tooltip": "增强规则 system prompt；文件缺失/读取失败时回落内置默认"},
+            {"default": str(NODE_DIR / "templates" / "常规文生图.txt"), "tooltip": "增强规则 system prompt；文件缺失/读取失败时回落内置默认"},
         )
         optional = {
             "参考图": ("IMAGE", {"tooltip": "可选：图生图/图生视频的参考图。仅当 LLM 设定器「支持视觉=是」时生效；否则忽略（降级纯文本）"}),
@@ -398,16 +564,6 @@ class Prompt_Enhancer:
             return ("", "")
         # 用户提示词-2：可选场景环境输入（可空；有值则作为场景环境补充，不覆盖主体）
         场景环境 = (kw.get("用户提示词-2") or "").strip()
-
-        # tag 对照模式：系统提示词文件名含 tag_match 时，附带全量已加载篮子选项（供 LLM 对比）
-        loaded_tag_block = ""
-        if "tag_match" in str(系统提示词文件).lower():
-            _tag_rows = []
-            for _sec in _get_dict()["sections"]:
-                for _f in _sec["fields"]:
-                    if _f.get("type") == "basket":
-                        _tag_rows.append(f"{_f['key']}：{'、'.join(_f.get('options', []))}")
-            loaded_tag_block = "\n\n【已加载tag】\n" + "\n".join(_tag_rows)
 
         # 从 LLM_CONFIG 取连接配置
         if not isinstance(LLM, dict) or not LLM.get("模型"):
@@ -445,11 +601,13 @@ class Prompt_Enhancer:
         任务类型 = kw.get("任务类型", "文生图(T2I)")
         任务类型行 = f"任务类型：{任务类型}"
 
-        # 从隐藏 state widget 解析篮子已选 tag（JSON：{字段key: [tag列表]}）
+        # 从隐藏 state widget 解析篮子已选 tag（JSON：{字段key: [tag列表]}）；预设引导语单独提取
+        preset_guidance = ""
         basket_tags = {}
         try:
             state = json.loads(kw.get("bsawang_basket_state") or "{}")
             if isinstance(state, dict):
+                preset_guidance = (state.pop("__preset_guidance", "") or "").strip()
                 for k, v in state.items():
                     basket_tags[k] = _split_basket(v if isinstance(v, str) else ",".join(v))
         except Exception:
@@ -476,6 +634,8 @@ class Prompt_Enhancer:
                             injected.append(_row)
         if injected:
             system_prompt = system_prompt.rstrip() + "\n\n## 内容篮子注入规则\n" + "\n".join(injected)
+        if preset_guidance:
+            system_prompt = system_prompt.rstrip() + "\n\n## 预设场景引导\n" + preset_guidance
 
         # 收集内容层 tag 建议（除任务类型/输出格式外的所有字典字段）
         # basket 字段值 = 逗号分隔的已选 tag（可能含用户手动补充的），拆成列表；空篮子不传。
@@ -552,7 +712,6 @@ class Prompt_Enhancer:
             "直接输出增强后的提示词本身，不要任何前言、解释或 markdown 代码块。\n\n"
             f"【用户提示词】\n{text}"
             + (f"\n\n【场景环境】\n{场景环境}" if 场景环境 else "")
-            + loaded_tag_block
         )
 
         种子 = int(kw.get("种子", 0) or 0)
@@ -697,7 +856,7 @@ class Prompt_Enhancer:
 
 
 def setup_routes(server):
-    """注册 GET /bsawang/prompt_enhancer/dict：返回最新篮子 meta（前端「刷新字典」按钮用）。"""
+    """注册字典/预设/Tag 管理路由：增强器「刷新字典」+ Tag 管理器前后端。"""
     from aiohttp import web
 
     async def handle_dict(request):
@@ -713,9 +872,95 @@ def setup_routes(server):
                         "condition": field.get("condition"),
                         "tasks": _tasks_from_condition(field.get("condition")),
                     }
-        return web.json_response({"basket_meta": basket_meta})
+        return web.json_response({"basket_meta": basket_meta, "presets": _load_presets()})
 
     server.routes.get("/bsawang/prompt_enhancer/dict")(handle_dict)
+
+    # ---- Tag 管理器后端：库编辑 / Tag 反推 共用 ----
+
+    async def handle_tag_dict(request):
+        """GET /bsawang/tag/dict：全部篮子（含 guidance/option_guidance，供库编辑器）+ 预设池。"""
+        data = _get_dict()
+        baskets = {}
+        for section in data["sections"]:
+            for field in section["fields"]:
+                if field.get("type") == "basket":
+                    baskets[field["key"]] = {
+                        "label": field.get("label", field["key"]),
+                        "options": field.get("options", []),
+                        "guidance": field.get("guidance", []),
+                        "option_guidance": field.get("option_guidance", {}),
+                        "mutually_exclusive": field.get("mutually_exclusive", False),
+                        "conflicts": field.get("conflicts", []),
+                        "condition": field.get("condition"),
+                        "tasks": _tasks_from_condition(field.get("condition")),
+                    }
+        return web.json_response({"baskets": baskets, "presets": _load_presets()})
+
+    async def handle_save_preset(request):
+        try:
+            body = await request.json()
+            name = _save_preset(body.get("name"), body.get("tags") or {}, body.get("label"), body.get("guidance", ""))
+            return web.json_response({"ok": True, "key": name})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_delete_preset(request):
+        try:
+            body = await request.json()
+            _delete_preset(body.get("name"))
+            return web.json_response({"ok": True})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_save_basket(request):
+        try:
+            body = await request.json()
+            key = _save_basket(body.get("key"), body.get("label"), body.get("guidance"))
+            return web.json_response({"ok": True, "key": key})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_delete_basket(request):
+        try:
+            body = await request.json()
+            _delete_basket(body.get("key"))
+            return web.json_response({"ok": True})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_save_option(request):
+        try:
+            body = await request.json()
+            _save_option(body.get("basket"), body.get("tag"), body.get("guidance"))
+            return web.json_response({"ok": True})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_delete_option(request):
+        try:
+            body = await request.json()
+            _delete_option(body.get("basket"), body.get("tag"))
+            return web.json_response({"ok": True})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_add_basket_option(request):
+        try:
+            body = await request.json()
+            _add_basket_option(body.get("basket"), body.get("tag"))
+            return web.json_response({"ok": True})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    server.routes.get("/bsawang/tag/dict")(handle_tag_dict)
+    server.routes.post("/bsawang/tag/save_preset")(handle_save_preset)
+    server.routes.post("/bsawang/tag/delete_preset")(handle_delete_preset)
+    server.routes.post("/bsawang/tag/save_basket")(handle_save_basket)
+    server.routes.post("/bsawang/tag/delete_basket")(handle_delete_basket)
+    server.routes.post("/bsawang/tag/save_option")(handle_save_option)
+    server.routes.post("/bsawang/tag/delete_option")(handle_delete_option)
+    server.routes.post("/bsawang/tag/add_basket_option")(handle_add_basket_option)
 
 
 WEB_DIRECTORY = "./web"

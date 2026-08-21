@@ -4,14 +4,39 @@
 
 > ComfyUI 自定义插件（GitHub：`bsawang/comfyui-bsawang-nodes`）。**本仓库即插件**，clone 到 `ComfyUI\custom_nodes\` 即用（无需 src/ 子目录）。独立 git 仓库内嵌于 aigc-study；**运行副本在 ComfyUI 侧**：`H:\ComfyUI_Windows_portable\ComfyUI\custom_nodes\ComfyUI-bsawang\`（改代码后手动同步到运行副本）。改动日志 `AGENT-LOGGER.md` 在仓库根。
 > 本插件合并原 `H3-API-格式化节点` + `提示词增强器` 两个节点包，统一 CATEGORY「提示词增强器」，右键菜单同组。
+> 📐 **设计文档**：[docs/DESIGN.md](docs/DESIGN.md)（架构 / 5 节点 / Tag 管理器 / 预设系统 / 直出机制 / 踩坑）；数据/制作规约：`docs/PRESET_SPEC.md`（预设）· `docs/BASKET_SPEC.md`（篮子）
 
-## 节点清单（3 个，全部 CATEGORY=提示词增强器）
+## 节点清单（5 个，全部 CATEGORY=提示词增强器）
 
 | 节点 | 显示名 | 用途 |
 |---|---|---|
 | H3_API_PromptFormatter | H3 API 提示词格式化 | 反推/原始描述 → MiniMax H3 完整提示词（六段式/base 三字段） |
 | LLM_API_Configurator | LLM API 设定器 | 封装 LLM 连接（接口/模型/URL/key/温度/max_tokens）→ `LLM_CONFIG` 对象 |
 | Prompt_Enhancer | 提示词增强器 | LLM 连接 + 用户提示词 → 按任务类型/艺术风格增强为完整提示词 |
+| Tag_Reverse | Tag 反推 | 反推文字 + LLM → 结构化 tag 集合 + 扩展建议（逐条采纳），中间节点双输出直出 |
+| Tag_Library | Tag 库编辑 | 三层库管理（tag/篮子/预设）：应用/保存/删除预设、篮子加选项 |
+
+## Tag 管理器（Tag_Reverse + Tag_Library + 预设）
+
+补全「图片反推 → tag 集合 → 预设复用 → 增强器应用」链路，完整设计见 [docs/DESIGN.md](docs/DESIGN.md) §5-§7：
+
+- **Tag_Reverse（中间节点直出）**：反推文字 + LLM → `tag集合JSON`（matched，喂下游）+ `反推结果`（完整，面板直出）。面板两块：匹配结果（`篮子>tag` chip + 存为预设）/ 建议批准（采纳 = 写篮子库 + 并入匹配）
+- **Tag_Library**：tag/篮子/预设 三层管理；应用预设 = 覆盖所涉篮子
+- **预设系统**：`presets/*.json`（格式见 [docs/PRESET_SPEC.md](docs/PRESET_SPEC.md)），增强器「预设」tab 一键应用
+- **直出机制**：ComfyUI 1.48 的 `executed` 事件只发显示节点 → 从显示节点回溯上游 Tag_Reverse → 读 `output.text[0]` 渲染；不轮询、不存后端反推状态
+- **运行区「重启」按钮**：`web/comfyui_topbar.js` 插入，直接 `POST /manager/reboot`（复用 ComfyUI-Manager）
+
+## 任务模版文件夹（templates/）
+
+各节点外置的 system prompt 统一收在 `templates/` 目录，按任务中文命名，`系统提示词文件` widget 默认指向此处，改 txt 即生效、不重启：
+
+| 文件 | 任务 | 对应节点 |
+|---|---|---|
+| `templates/常规文生图.txt` | 提示词增强通用基座（文生图/图生图/文生视频/图生视频） | Prompt_Enhancer 默认 |
+| `templates/H3视频提示词格式化.txt`（`.nsfw` 变体） | H3 视频提示词格式化（六段式） | H3_API_PromptFormatter 默认 |
+
+> NSFW 后缀机制保留：`.nsfw` 变体文件按原约定命名，`.gitignore` 的 `*nsfw*` 忽略不变，本地保留、不上远程。
+> 已弃用：`Krea2Edit场景融合` 为老方案（VL 反推 → LLM 融合），现已优化为 LLM 前置（Prompt_Enhancer 直接承接），不再收录。
 
 ## 节点 1：H3 API 提示词格式化
 
@@ -23,7 +48,7 @@
 | text | STRING multiline | 空 | 接反推节点输出 |
 | 任务类型 | combo | 全参考模式 | 全参考 / T2VA / I2VA / FL2VA / L2VA |
 | 视频时长 | FLOAT | 10 | 定时间轴 |
-| 系统提示词文件 | STRING | `<节点>\h3_system_prompt.txt` | H3 规范 system prompt，改 txt 即生效 |
+| 系统提示词文件 | STRING | `<节点>\templates\H3视频提示词格式化.txt` | H3 规范 system prompt，改 txt 即生效 |
 
 **输出**：提示词（STRING）。陷阱：任务类型选 base 输出三字段，与 ref2va 节点不匹配——锁「全参考模式」用。
 

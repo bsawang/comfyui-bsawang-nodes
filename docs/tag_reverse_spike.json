@@ -1,0 +1,114 @@
+{
+  "id": "tag-reverse-spike-0001",
+  "revision": 0,
+  "last_node_id": 2,
+  "last_link_id": 1,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Tag_Reverse",
+      "pos": [
+        -1000,
+        -400
+      ],
+      "size": [
+        500,
+        700
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "LLM",
+          "type": "LLM_CONFIG",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "tag集合JSON",
+          "type": "STRING",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Tag_Reverse",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": [
+        "云海之上的白玉天阶，朱红鎏金灯柱排列两侧，丹霞色天门，远处主殿横向如山脉，几名青绿长衣旅人背影登阶，身量极小。",
+        "H:\\ComfyUI_Windows_portable\\ComfyUI\\custom_nodes\\ComfyUI-bsawang\\templates\\Tag反推结构化.txt",
+        "{\"主题风格\":[\"仙侠\"],\"构图风格\":[\"天宫\"]}"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "PreviewAny",
+      "pos": [
+        -320,
+        -400
+      ],
+      "size": [
+        400,
+        400
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewAny",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": []
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ue_links": [],
+    "ds": {
+      "scale": 1,
+      "offset": [
+        0,
+        0
+      ]
+    },
+    "frontendVersion": "1.48.7"
+  },
+  "version": 0.4
+}

@@ -1,7 +1,9 @@
 # 篮子制作规约（Basket Specification）
 
+> 本规约**供 agent 制作篮子（baskets/*.json）时参考**：JSON 格式、字段表、约束、质检清单。
 > 提示词增强器「内容设置」的 tag 篮子：**一个篮子 = 一个文件**。
 > 节点加载时把 `baskets/` 目录下所有 JSON 文件**动态合并**进字典（DICT），增删篮子 = 增删文件，不改节点代码。
+> 系统设计（节点如何消费篮子）见设计文档 `DESIGN.md`——本规约讲「JSON 怎么写」，设计文档讲「怎么设计」，不冲突。
 
 ## 1. 目录与文件规则
 
@@ -71,7 +73,7 @@
 
 ### 注入机制（guidance / option_guidance）
 
-系统提示词 = 基座 `prompt_enhancer_system.txt` + **运行时按选中篮子注入**：
+系统提示词 = 基座 `templates/常规文生图.txt` + **运行时按选中篮子注入**：
 
 - 篮子有选中 tag → 该篮子的 `guidance`（整篮规则）注入
 - 选中 tag 里有 `option_guidance` 对应行 → **只注入已选选项**的行（未选的不给，省 token、不干扰）
@@ -123,7 +125,7 @@ for f in baskets/*.json:          # 本地存在的所有篮子文件
 运行时（每次 enhance）：
 
 ```
-system prompt = 基座 prompt_enhancer_system.txt
+system prompt = 基座 templates/常规文生图.txt
                  + 选中篮子的 guidance（去重）
                  + 选中选项的 option_guidance 行（去重）
 ```

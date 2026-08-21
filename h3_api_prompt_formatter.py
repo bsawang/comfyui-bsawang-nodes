@@ -3,7 +3,7 @@
 H3 API 提示词格式化节点
 
 把反推/原始描述通过 API LLM 格式化为 MiniMax H3 完整提示词。
-替代闭源 TE_H3_Prompt_Enhancer：system prompt 明文可改（h3_system_prompt.txt），
+替代闭源 TE_H3_Prompt_Enhancer：system prompt 明文可改（templates/H3视频提示词格式化.txt），
 不会凭空添加 <Video N> / 丢时间戳，规则完全可控。
 
 默认走 DeepSeek Anthropic 兼容接口 + thinking disabled：
@@ -24,7 +24,7 @@ NODE_DIR = Path(__file__).parent
 
 def _load_default_system_prompt() -> str:
     try:
-        return (NODE_DIR / "h3_system_prompt.txt").read_text(encoding="utf-8")
+        return (NODE_DIR / "templates" / "H3视频提示词格式化.txt").read_text(encoding="utf-8")
     except Exception:
         return (
             "你是 MiniMax H3 视频生成模型的提示词专家。"
@@ -85,7 +85,7 @@ class H3_API_PromptFormatter:
                 "系统提示词文件": (
                     "STRING",
                     {
-                        "default": str(NODE_DIR / "h3_system_prompt.txt"),
+                        "default": str(NODE_DIR / "templates" / "H3视频提示词格式化.txt"),
                         "tooltip": "本地文件路径，读取 H3 system prompt；文件缺失/读取失败时回落内置默认",
                     },
                 ),
@@ -128,7 +128,7 @@ class H3_API_PromptFormatter:
                 "回退 ANTHROPIC_AUTH_TOKEN 也为空。请在 ComfyUI 启动环境设置，或改 widget 里的环境变量名。"
             )
 
-        # 任务类型 → 输出结构映射已外置到 h3_system_prompt.txt「UI 任务类型 → 输出结构映射」段，
+        # 任务类型 → 输出结构映射已外置到 templates/H3视频提示词格式化.txt「UI 任务类型 → 输出结构映射」段，
         # 源码只做拼接：把任务类型/时长/文本传给 LLM，LLM 按 txt 的映射规则输出。
         user_msg = (
             f"任务类型：{任务类型}\n"

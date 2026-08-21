@@ -64,6 +64,8 @@ function createPanel(node, nodeData) {
     const stateDef = required["bsawang_basket_state"];
     let metaMap = stateDef?.[1]?.["bsawang.basketMeta"] || {};
     let basketKeys = Object.keys(metaMap);
+    let presets = {};      // 预设池 {key: {label, description, tags}}，来自 /dict 接口
+    let presetView = null; // 「预设」tab 的容器（index 0，独立于 basketEls）
     if (basketKeys.length === 0) return false;
 
     // 任务类型 widget（原生 combo）：监听变化，按 meta.tasks 动态显隐分类 tab
@@ -138,25 +140,26 @@ function createPanel(node, nodeData) {
     const root = make("div", {
         position: "relative", width: `${PANEL_WIDTH}px`, maxWidth: "100%",
         boxSizing: "border-box", color: "#d7e3ef", fontFamily: "Arial,sans-serif",
-        fontSize: "12px", userSelect: "none", padding: "3px 4px 2px", overflow: "visible",
+        fontSize: "12px", userSelect: "none", padding: "8px", overflow: "visible",
+        border: "1px solid #2d4255", borderRadius: "8px", background: "#101b26",
     });
 
     const style = make("style");
     style.textContent = `
       .bsa-tabs{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px}
-      .bsa-tab{padding:3px 10px;border-radius:9px;cursor:pointer;font-size:11px;line-height:16px;border:1px solid #2d4255;background:#14202c;color:#9fb4c5;transition:background .12s}
+      .bsa-tab{padding:3px 10px;border-radius:8px 8px 0 0;cursor:pointer;font-size:11px;line-height:16px;border:1px solid #2d4255;background:#14202c;color:#9fb4c5;transition:background .12s}
       .bsa-tab:hover{border-color:#0aa4d6}
       .bsa-tab.active{background:#0aa4d6;border-color:#0aa4d6;color:#06131b;font-weight:600}
-      .bsa-basket{display:none;flex-wrap:wrap;gap:4px;padding:6px;border:1px solid #2d4255;border-radius:8px;background:#101b26}
+      .bsa-basket{display:none;flex-wrap:wrap;gap:4px;padding:6px;border-top:1px solid #2d4255;margin-top:6px;padding-top:6px}
       .bsa-basket.show{display:flex}
       .bsa-chip{display:inline-block;padding:2px 9px;border-radius:10px;cursor:pointer;font-size:11px;line-height:16px;border:1px solid #3a5060;background:#1d2731;color:#c9d8e4;transition:background .12s}
       .bsa-chip:hover{border-color:#0aa4d6}
       .bsa-chip.on{background:#0aa4d6;border-color:#0aa4d6;color:#06131b;font-weight:600}
       .bsa-chip.disabled{background:#0d141b;border-color:#26333d;color:#4a5863;cursor:not-allowed;pointer-events:none}
       .bsa-btns{display:flex;gap:6px;margin-bottom:4px}
-      .bsa-btn{padding:3px 12px;border-radius:7px;cursor:pointer;font-size:11px;line-height:16px;border:1px solid #3a5060;background:#14202c;color:#9fb4c5;transition:background .12s}
+      .bsa-btn{padding:3px 12px;border-radius:7px;cursor:pointer;font-size:11px;line-height:16px;border:1px solid #3a5060;background:#14202c;color:#9fb4c5;transition:background .12s;display:inline-flex;align-items:center;gap:4px}
       .bsa-btn:hover{border-color:#0aa4d6;background:#1a2a3a;color:#e1e9ef}
-      .bsa-summary{margin-top:5px;padding:5px 7px;border:1px solid #2d4255;border-radius:6px;background:#0d141b;min-height:20px;line-height:1.5;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+      .bsa-summary{margin-top:5px;padding:5px 7px;min-height:20px;line-height:1.5;display:flex;flex-wrap:wrap;gap:4px;align-items:center;border-top:1px solid #2d4255;margin-top:6px;padding-top:6px}
       .bsa-sumtag{display:inline-block;padding:1px 8px;border-radius:9px;font-size:10px;line-height:15px;background:#0aa4d6;color:#06131b;border:1px solid #0aa4d6;cursor:pointer}
       .bsa-empty{color:#4a5863;font-size:11px}
     `;
@@ -165,16 +168,19 @@ function createPanel(node, nodeData) {
     // 清空/随机按钮行
     const btnRow = make("div", {}, "");
     btnRow.className = "bsa-btns";
-    const btnClear = make("button", {}, "清空篮子");
+    const ICON_CLEAR = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>';
+    const ICON_RANDOM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>';
+    const ICON_REFRESH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 11-2.64-6.36M21 3v6h-6"/></svg>';
+    const btnClear = make("button", {}); btnClear.innerHTML = ICON_CLEAR + " 清空";
     btnClear.className = "bsa-btn";
     btnClear.addEventListener("click", clearBaskets);
-    const btnRandom = make("button", {}, "随机篮子");
+    const btnRandom = make("button", {}); btnRandom.innerHTML = ICON_RANDOM + " 随机";
     btnRandom.className = "bsa-btn";
     btnRandom.addEventListener("click", randomBaskets);
     btnRow.appendChild(btnClear);
     btnRow.appendChild(btnRandom);
     // 刷新字典：重读 baskets/ + dict.json，重建篮子 tab/chips（无需重启）
-    const btnRefresh = make("button", {}, "刷新字典");
+    const btnRefresh = make("button", {}); btnRefresh.innerHTML = ICON_REFRESH + " 刷新";
     btnRefresh.className = "bsa-btn";
     btnRefresh.title = "重读 baskets/ 与 dict.json，刷新篮子选项（无需重启）";
     btnRefresh.addEventListener("click", async () => {
@@ -183,6 +189,7 @@ function createPanel(node, nodeData) {
             const data = await res.json();
             if (!data || !data.basket_meta) throw new Error("响应缺少 basket_meta");
             metaMap = data.basket_meta;
+            presets = data.presets || {};
             renderBaskets();
         } catch (e) {
             console.error("[提示词增强器] 刷新字典失败：", e);
@@ -238,14 +245,16 @@ function createPanel(node, nodeData) {
     }
     function applyTaskFilter() {
         tabs.forEach((t, i) => {
-            const visible = isTaskVisible(basketKeys[i]);
+            if (i === 0) { t.style.display = ""; return; }  // 「预设」tab 始终可见
+            const visible = isTaskVisible(basketKeys[i - 1]);
             t.style.display = visible ? "" : "none";
-            basketEls[i].style.display = visible ? "" : "none";
+            basketEls[i - 1].style.display = visible ? "" : "none";
         });
         // 当前激活的 tab 若被隐藏，切到第一个可见的
-        if (!isTaskVisible(basketKeys[activeIdx])) {
-            const firstVisible = basketKeys.findIndex((k, i) => isTaskVisible(k));
-            if (firstVisible >= 0) switchTab(firstVisible);
+        if (activeIdx > 0 && !isTaskVisible(basketKeys[activeIdx - 1])) {
+            const firstVisible = basketKeys.findIndex((k) => isTaskVisible(k));
+            if (firstVisible >= 0) switchTab(firstVisible + 1);
+            else switchTab(0);
         }
         if (domWidget) domWidget.setSize?.();
     }
@@ -253,31 +262,87 @@ function createPanel(node, nodeData) {
     let switchTab = function (idx) {
         activeIdx = idx;
         tabs.forEach((t, i) => t.classList.toggle("active", i === idx));
-        basketEls.forEach((el, i) => el.classList.toggle("show", i === idx));
+        if (idx === 0) {
+            if (presetView) presetView.classList.add("show");
+            basketEls.forEach((el) => el.classList.remove("show"));
+        } else {
+            if (presetView) presetView.classList.remove("show");
+            basketEls.forEach((el, i) => el.classList.toggle("show", i + 1 === idx));
+        }
         if (domWidget) domWidget.setSize?.();
     };
 
-    // 按当前 metaMap 构建/重建篮子（tab 行 + chips）——「刷新字典」按钮重调
+    // 渲染「预设」tab 的 chips（点预设 → 覆盖所涉篮子）
+    function renderPresetChips() {
+        if (!presetView) return;
+        presetView.innerHTML = "";
+        const names = Object.keys(presets);
+        if (names.length === 0) {
+            const empty = make("span", {}, "无预设 — 用「Tag 反推 / Tag 库编辑」存预设，点此应用（覆盖所涉篮子）");
+            empty.className = "bsa-empty";
+            presetView.appendChild(empty);
+            return;
+        }
+        for (const n of names) {
+            const p = presets[n];
+            const chip = make("span", {}, p.label || n);
+            chip.className = "bsa-chip";
+            chip.title = p.guidance ? p.guidance.slice(0, 60) + "…" : `应用「${n}」：覆盖所涉篮子（可再微调）`;
+            chip.addEventListener("click", () => {
+                const tags = p.tags || {};
+                for (const key of Object.keys(tags)) {
+                    const bi = basketKeys.indexOf(key);
+                    if (bi >= 0) {
+                        setTags(key, tags[key]);
+                        if (basketRefreshers[bi]) basketRefreshers[bi]();
+                    }
+                }
+                // 预设引导语注入 system prompt（存进 state 隐藏字段，enhance 时读取）
+                if (p.guidance) state["__preset_guidance"] = p.guidance;
+                else delete state["__preset_guidance"];
+                persistState();
+                renderSummary();
+            });
+            presetView.appendChild(chip);
+        }
+    }
+
+    // 按当前 metaMap 构建/重建篮子（tab 行 + chips）；「预设」tab 恒为 index 0 ——「刷新字典」按钮重调
     function renderBaskets() {
         tabRow.innerHTML = "";
         for (const el of basketEls) el.remove();
+        if (presetView) presetView.remove();
         basketEls = [];
         basketRefreshers = [];
         tabs = [];
         activeIdx = 0;
         basketKeys = Object.keys(metaMap);
+
+        // 「预设」tab（index 0，始终可见）
+        const presetTab = make("span", {}, "预设");
+        presetTab.className = "bsa-tab";
+        presetTab.title = "一键应用预设（覆盖所涉篮子，可再微调）";
+        presetTab.addEventListener("click", () => switchTab(0));
+        tabs.push(presetTab);
+        tabRow.appendChild(presetTab);
+        presetView = make("div", {}, "");
+        presetView.className = "bsa-basket" + (basketKeys.length === 0 ? " show" : "");
+        renderPresetChips();
+        root.insertBefore(presetView, summaryEl);
+
         if (basketKeys.length === 0) {
             renderSummary();
+            if (domWidget) domWidget.setSize?.();
             return;
         }
         basketKeys.forEach((key, i) => {
             const meta = metaMap[key];
             const options = meta.options || [];
-            // tab
+            // tab（index = i + 1，0 被「预设」占用）
             const tab = make("span", {}, key);
             tab.className = "bsa-tab" + (i === 0 ? " active" : "");
             tab.title = "点击切换";
-            tab.addEventListener("click", () => switchTab(i));
+            tab.addEventListener("click", () => switchTab(i + 1));
             tabs.push(tab);
             tabRow.appendChild(tab);
 
@@ -329,6 +394,14 @@ function createPanel(node, nodeData) {
     root.appendChild(tabRow);
     root.appendChild(summaryEl);
     renderBaskets();
+    // 异步拉取预设池（初始 metaMap 来自 widget；预设需走 /dict 接口）
+    fetch("/bsawang/prompt_enhancer/dict").then((r) => r.json()).then((d) => {
+        if (d && d.presets) {
+            presets = d.presets;
+            renderPresetChips();
+            if (domWidget) domWidget.setSize?.();
+        }
+    }).catch(() => {});
 
     // 重新同步：ComfyUI 在节点创建（onNodeCreated）之后才应用保存的 widget 值，
     // 面板初建时读到的可能是默认 "{}"，值被应用后需重建 chips（覆盖切换工作流/重开清空问题）
@@ -377,7 +450,7 @@ function createPanel(node, nodeData) {
     node.computeSize = function (out) {
         const measured = baseComputeSize(out);
         measured[0] = PANEL_WIDTH;
-        const visible = basketEls[activeIdx];
+        const visible = activeIdx === 0 ? presetView : basketEls[activeIdx - 1];
         const chipCount = visible ? visible.querySelectorAll(".bsa-chip").length : 0;
         const rows = Math.max(1, Math.ceil(chipCount / 6));
         measured[1] = Math.max(measured[1] || 0, 30 + rows * 22 + 34);
