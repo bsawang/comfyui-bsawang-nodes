@@ -147,7 +147,9 @@ def _run_match(config, text, sp_file):
             continue
         bk = (s.get("篮子") or "").strip()
         tag = (s.get("tag") or "").strip()
-        if bk and tag and _basket_options(bk) is not None:
+        opts = _basket_options(bk)
+        # 建议必须是「库中不存在」的新 tag：库中已有的（如 跪趴撅臀/私处/ahegao）过滤掉
+        if bk and tag and opts is not None and tag not in opts:
             clean_suggestions.append({"篮子": bk, "tag": tag, "reason": (s.get("reason") or "").strip()})
     return valid_matched, clean_suggestions
 

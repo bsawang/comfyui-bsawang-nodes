@@ -1,5 +1,28 @@
 # AGENT-LOGGER — bsawang-nodes（提示词增强器插件）
 
+## 2026-08-22 预设自检 + 增强器信息栏报错 + tag 库自动同步 + 移除重启补丁（定案）
+
+### 背景
+反推存预设能存进「互斥篮子多选」的坏预设（如艺术风格同时选 超写实+3D渲染），增强器执行时才报 `[艺术风格] 互斥` 错且只在日志层、面板看不到。要求：后端存时拦 + 报错上浮增强器信息栏。
+
+### 改动
+- **预设自检（后端）**：把 `_validate_basket` 拆出共享 `_collect_basket_errors`（互斥/冲突对/跨字段 gate 三套规则），`_save_preset` 存前校验——坏预设任何入口（反推/库编辑/手动）都存不进去，400 错误透传到面板
+- **增强器信息栏报错（前端）**：加 `validateState`/`reportValidation`（与后端同规则、同消息格式），应用预设/chip 点选/载入工作流时校验，错误红 ✗ 显示信息栏，解除自动回「就绪」；不自动改数据，提示用户手动解除
+- **tag 库自动同步**：任何篮子/预设写入递增 `TAG_LIB_VERSION` + WebSocket 推 `bsawang/tag_lib_changed`，增强器/库编辑面板收到即刷新（非轮询）
+- **反推建议去重**：`suggestions` 只列库中不存在的新 tag（库中已有的不再建议，宁少勿重）
+- **移除重启补丁**：删 `web/comfyui_topbar.js`——bsawang-nodes 不再给 ComfyUI 打补丁，重启走 ComfyUI-Manager 菜单自带 Restart（同 `/manager/reboot`）；README/DESIGN 同步
+- **token 用量 fetch 兜底**：`showUsageOnNode` 加 `.catch` 静默，失败不再落 console
+
+### 关键实现点
+1. **报错上浮双轨**：前端校验即时提示（应用预设当场红 ✗）+ 后端 `_validate_basket` 执行时兜底（节点变红）；规则收敛到 `_collect_basket_errors` 一处，前后端不漂移
+2. **运行副本**：只 `prompt_enhancer.py` 落后（缺互斥检查），其余已同步；本次全量 diff 校验
+3. **验证**：临时脚本调 `_save_preset`（2 个艺术风格被拦 / 1 个正常存），跑完清理
+
+### 相关
+- 上一节「Tag 库编辑完整编辑器」；ComfyUI-Manager 自带 Restart 按钮（`js/comfyui-manager.js` restartOrStop）
+
+---
+
 ## 2026-08-22 Tag 库编辑「篮子/预设」完整编辑器 + 样式统一标准（定案）
 
 ### 背景

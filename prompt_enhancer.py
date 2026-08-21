@@ -28,6 +28,19 @@ BASKETS_DIR = NODE_DIR / "baskets"
 PRESETS_DIR = NODE_DIR / "presets"
 TASKS_PATH = NODE_DIR / "tasks.json"
 
+# tag 库版本号：任何篮子/预设写入时递增；并用 WebSocket 推送「库变了」事件（前端通知机制，非轮询）
+TAG_LIB_VERSION = 0
+
+
+def _bump_lib_version():
+    global TAG_LIB_VERSION
+    TAG_LIB_VERSION += 1
+    try:
+        from server import PromptServer
+        PromptServer.instance.send_sync("bsawang/tag_lib_changed", {"version": TAG_LIB_VERSION})
+    except Exception:
+        pass
+
 
 
 def _load_tasks() -> dict:
@@ -203,6 +216,13 @@ def _save_preset(name, tags, label=None, guidance=""):
     name = (name or "").strip().replace("/", "_").replace("\\", "_")
     if not name:
         raise ValueError("[Tag] 预设名不能为空")
+    # 自检：篮子 key 存在 + 组合约束（互斥/冲突/跨字段 gate）——坏预设任何入口都存不进去
+    for bk in (tags or {}):
+        if _basket_options(bk) is None:
+            raise ValueError(f"[Tag] 预设的篮子「{bk}」不存在当前字典，请检查篮子 key")
+    errs = _collect_basket_errors(tags or {})
+    if errs:
+        raise ValueError("[Tag] 预设组合自检失败：\n" + "\n".join("  - " + e for e in errs))
     data = {
         "key": name,
         "label": label or name,
@@ -214,6 +234,7 @@ def _save_preset(name, tags, label=None, guidance=""):
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     _PRESET_CACHE["data"] = None
+    _bump_lib_version()
     return name
 
 
@@ -223,6 +244,7 @@ def _delete_preset(name):
     if path.exists():
         path.unlink()
     _PRESET_CACHE["data"] = None
+    _bump_lib_version()
     return True
 
 
@@ -235,11 +257,12 @@ def _read_basket_file(basket):
 
 
 def _write_basket_file(basket, data):
-    """写回 baskets/{basket}.json + 失效字典缓存。"""
+    """写回 baskets/{basket}.json + 失效字典缓存 + 递增库版本。"""
     (BASKETS_DIR / f"{basket}.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     _DICT_CACHE["data"] = None
+    _bump_lib_version()
 
 
 def _save_basket(key, label=None, guidance=None):
@@ -271,6 +294,7 @@ def _delete_basket(key):
     if path.exists():
         path.unlink()
     _DICT_CACHE["data"] = None
+    _bump_lib_version()
     return True
 
 
@@ -355,8 +379,8 @@ def _split_basket(value):
     return [t.strip() for t in str(value or "").split(",") if t.strip() and t.strip() != "未设置"]
 
 
-def _validate_basket(tags_by_field: dict):
-    """自检：校验内容层组合合理性。检测互斥/冲突/跨字段矛盾，发现即 raise（报错拦截，不改数据）。
+def _collect_basket_errors(tags_by_field: dict) -> list:
+    """收集内容层组合自检错误（互斥/冲突/跨字段矛盾）；无错返回空列表。
 
     tags_by_field: {字段key: [已选tag列表]}
     """
@@ -393,6 +417,15 @@ def _validate_basket(tags_by_field: dict):
                     errors.append(
                         f"[跨字段] 矛盾：{gate_key} 未选，但「{k}」仍有选择（{'、'.join(tags_by_field[k])}），请先选 {gate_key} 或清空「{k}」"
                     )
+    return errors
+
+
+def _validate_basket(tags_by_field: dict):
+    """自检：校验内容层组合合理性。检测互斥/冲突/跨字段矛盾，发现即 raise（报错拦截，不改数据）。
+
+    tags_by_field: {字段key: [已选tag列表]}
+    """
+    errors = _collect_basket_errors(tags_by_field)
     if errors:
         raise ValueError("[提示词增强器] 内容组合自检失败：\n" + "\n".join("  - " + e for e in errors))
 

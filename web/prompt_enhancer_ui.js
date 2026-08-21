@@ -52,7 +52,7 @@ function showUsageOnNode(node) {
         }
         badge.textContent = label;
         badge.style.display = "";
-    });
+    }).catch(() => {}); // 用量徽章非关键：读取失败静默，不落 console
 }
 
 // ---------- 面板构建 ----------
@@ -165,6 +165,47 @@ function createPanel(node, nodeData) {
     `;
     root.appendChild(style);
 
+    // 信息栏：顶部（图标 + 文本 + 底部横线）
+    const statusIcon = make("span", {}, "ℹ"); statusIcon.style.cssText = "font-weight:600";
+    const statusTextEl = make("span", { flex: "1" }, "就绪");
+    const statusEl = make("div", {});
+    statusEl.className = "bsa-status";
+    statusEl.style.cssText = "display:flex;align-items:center;gap:6px;border-bottom:1px solid #2d4255;padding-bottom:4px;margin-bottom:6px;color:#8fd0a0;font-size:11px";
+    statusEl.appendChild(statusIcon); statusEl.appendChild(statusTextEl);
+    root.appendChild(statusEl);
+    function setStatus(msg, ok) {
+        statusTextEl.textContent = msg;
+        statusIcon.textContent = ok === false ? "✗" : (ok ? "✓" : "ℹ");
+        statusIcon.style.color = ok === false ? "#e06c75" : (ok ? "#8fd0a0" : "#7fb0c4");
+    }
+
+    // 前端组合自检：与后端 _collect_basket_errors 同规则（互斥/冲突），出错显示在信息栏
+    function validateState() {
+        const errs = [];
+        for (const key of basketKeys) {
+            const tags = tagsOf(key);
+            if (!tags.length) continue;
+            const meta = metaMap[key] || {};
+            if (meta.mutually_exclusive && tags.length > 1)
+                errs.push(`[${key}] 互斥：一次只能选一个，当前选了 ${tags.length} 个：${tags.join("、")}`);
+            for (const pair of (meta.conflicts || [])) {
+                if (tags.includes(pair[0]) && tags.includes(pair[1]))
+                    errs.push(`[${key}] 冲突：『${pair[0]}』与『${pair[1]}』不能同时选`);
+            }
+        }
+        return errs;
+    }
+    function reportValidation() {
+        const errs = validateState();
+        if (errs.length) {
+            setStatus(errs.join("　"), false);
+            return errs;
+        }
+        // 报错已解除（✗ 状态）→ 回中性「就绪」，否则保留原状态（成功消息等）
+        if (statusIcon.textContent === "✗") setStatus("就绪");
+        return [];
+    }
+
     // 清空/随机按钮行
     const btnRow = make("div", {}, "");
     btnRow.className = "bsa-btns";
@@ -173,30 +214,37 @@ function createPanel(node, nodeData) {
     const ICON_REFRESH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 11-2.64-6.36M21 3v6h-6"/></svg>';
     const btnClear = make("button", {}); btnClear.innerHTML = ICON_CLEAR + " 清空";
     btnClear.className = "bsa-btn";
-    btnClear.addEventListener("click", clearBaskets);
+    btnClear.addEventListener("click", () => { clearBaskets(); setStatus("已清空所有篮子", true); });
     const btnRandom = make("button", {}); btnRandom.innerHTML = ICON_RANDOM + " 随机";
     btnRandom.className = "bsa-btn";
-    btnRandom.addEventListener("click", randomBaskets);
+    btnRandom.addEventListener("click", () => { randomBaskets(); setStatus("已随机填充篮子", true); });
     btnRow.appendChild(btnClear);
     btnRow.appendChild(btnRandom);
     // 刷新字典：重读 baskets/ + dict.json，重建篮子 tab/chips（无需重启）
+    async function refreshDict() {
+        const res = await fetch("/bsawang/prompt_enhancer/dict");
+        const data = await res.json();
+        if (!data || !data.basket_meta) throw new Error("响应缺少 basket_meta");
+        metaMap = data.basket_meta;
+        presets = data.presets || {};
+        renderBaskets();
+        setStatus("字典已刷新", true);
+    }
     const btnRefresh = make("button", {}); btnRefresh.innerHTML = ICON_REFRESH + " 刷新";
     btnRefresh.className = "bsa-btn";
     btnRefresh.title = "重读 baskets/ 与 dict.json，刷新篮子选项（无需重启）";
     btnRefresh.addEventListener("click", async () => {
-        try {
-            const res = await fetch("/bsawang/prompt_enhancer/dict");
-            const data = await res.json();
-            if (!data || !data.basket_meta) throw new Error("响应缺少 basket_meta");
-            metaMap = data.basket_meta;
-            presets = data.presets || {};
-            renderBaskets();
-        } catch (e) {
-            console.error("[提示词增强器] 刷新字典失败：", e);
-        }
+        try { await refreshDict(); }
+        catch (e) { setStatus("刷新字典失败：" + e.message, false); }
     });
     btnRow.appendChild(btnRefresh);
     root.appendChild(btnRow);
+
+    // tag 库自动同步：后端 WebSocket 推送通知，收到即刷新（非轮询）
+    app.api?.addEventListener?.("bsawang/tag_lib_changed", async () => {
+        try { await refreshDict(); }
+        catch (e) { setStatus("库自动同步失败：" + e.message, false); }
+    });
 
     // 按 meta 顺序构建篮子（Tab 行 + 分类 chip）
     const tabRow = make("div", {}, "");
@@ -302,6 +350,9 @@ function createPanel(node, nodeData) {
                 else delete state["__preset_guidance"];
                 persistState();
                 renderSummary();
+                // 组合自检：预设若含互斥/冲突组合，出错显示在信息栏（不自动改，用户手动解除）
+                const errs = reportValidation();
+                if (!errs.length) setStatus(`已应用预设「${n}」`, true);
             });
             presetView.appendChild(chip);
         }
@@ -377,6 +428,7 @@ function createPanel(node, nodeData) {
                         setTags(key, cur);
                         basketRefreshers[i]();
                         renderSummary();
+                        reportValidation(); // 手动改完即复查：解除报错后信息栏回「就绪」
                     });
                     box.appendChild(chip);
                 }
@@ -411,6 +463,7 @@ function createPanel(node, nodeData) {
             state = fresh;
             basketRefreshers.forEach((fn) => fn());
             renderSummary();
+            reportValidation(); // 载入工作流若带坏状态（旧预设残留等），信息栏即时提示
         }
     }
     // 1) ComfyUI 按名赋值 widget 时会触发 callback

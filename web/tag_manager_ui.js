@@ -624,6 +624,12 @@ function createLibraryPanel(node, nodeData) {
     }
     setTimeout(loadFromBackend, 0);
 
+    // tag 库自动同步：后端 WebSocket 推送通知，收到即刷新（非轮询）
+    app.api?.addEventListener?.("bsawang/tag_lib_changed", async () => {
+        try { await refreshDict(); }
+        catch (e) { setStatus("库自动同步失败：" + e.message, false); }
+    });
+
     domWidget = node.addDOMWidget("bsawang_tag_library_panel", "bsawang_tag_library_panel", root, {
         serialize: false, hideOnZoom: false,
     });
@@ -656,7 +662,12 @@ function extractFullResult(output) {
     else if (output.text != null) s = Array.isArray(output.text) ? output.text[0] : output.text;
     else s = output["反推结果"];
     if (!s) return null;
-    try { return JSON.parse(s); } catch (e) { return null; }
+    try {
+        const parsed = JSON.parse(s);
+        // 只接受「完整反推结果」（含 matched 键）；matched-only 的 tag集合JSON 输出跳过，避免第二次 executed 事件清空面板
+        if (!parsed || typeof parsed !== "object" || !("matched" in parsed)) return null;
+        return parsed;
+    } catch (e) { return null; }
 }
 
 // executed 事件只发给「显示节点」（PreviewAny 等），中间节点不触发。

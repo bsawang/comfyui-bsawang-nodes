@@ -24,7 +24,7 @@
 - **Tag_Library**：tag/篮子/预设 三层管理；应用预设 = 覆盖所涉篮子
 - **预设系统**：`presets/*.json`（格式见 [docs/PRESET_SPEC.md](docs/PRESET_SPEC.md)），增强器「预设」tab 一键应用
 - **直出机制**：ComfyUI 1.48 的 `executed` 事件只发显示节点 → 从显示节点回溯上游 Tag_Reverse → 读 `output.text[0]` 渲染；不轮询、不存后端反推状态
-- **运行区「重启」按钮**：`web/comfyui_topbar.js` 插入，直接 `POST /manager/reboot`（复用 ComfyUI-Manager）
+- **重启**：不自建——ComfyUI-Manager 菜单自带「Restart」按钮（走 `/manager/reboot`）
 
 ## 任务模版文件夹（templates/）
 

@@ -40,7 +40,6 @@
 ┌────────────────────────── ComfyUI 前端（web/） ──────────────────────────┐
 │  prompt_enhancer_ui.js（增强器四栏面板 + 预设 tab）                       │
 │  tag_manager_ui.js（Tag_Reverse 两块面板 + Tag_Library 三层面板）         │
-│  comfyui_topbar.js（运行区重启按钮）                                     │
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │ executed 事件直出（Tag_Reverse 面板刷新，回溯上游）
 ┌───────────────┴──────────────────────────────────────────────────────────┐
@@ -128,7 +127,6 @@
 | `/bsawang/tag/delete_preset` | POST | 删预设 |
 | `/bsawang/tag/add_basket_option` | POST | 篮子加选项（写 baskets/*.json + 失效缓存）|
 | `/llm_usage/last` | GET | 本次 token 用量（llm_usage 模块）|
-| `/manager/reboot` | POST | **复用 ComfyUI-Manager**，重启按钮调它，不自建 |
 
 ## 5. 节点详细设计
 
