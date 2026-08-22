@@ -21,7 +21,6 @@
 ```json
 {
   "key": "光线",
-  "label": "光线",
   "section": "content",
   "section_title": "内容设置",
   "type": "basket",
@@ -57,8 +56,7 @@
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `key` | ✅ | 唯一键，全目录不重复；state 存储 key + 传 LLM 的维度名 |
-| `label` | ✅ | 显示名（tab 内维度名 / 传给 LLM 的名称）|
+| `key` | ✅ | 唯一键，全目录不重复（**无 `label` 字段，key=label 单一模型**）；即文件名 `{key}.json`、显示名、state 存储 key、传 LLM 的维度名 |
 | `section` | ✅ | 所属 tab 的 id。现有：`type` / `type_info` / `content` / `output`；**新 tab 用新 id，加载器自动创建** |
 | `section_title` | | 新 tab 时的显示标题（不写则用 `section` 当标题）；同 `section` 的文件需保持一致 |
 | `type` | ✅ | 固定 `"basket"` |
@@ -81,6 +79,8 @@
 
 ### 约束
 
+- 篮子**无 `label` 字段**（key=label 单一模型）；`key` 即文件名/显示名/传 LLM 的维度名
+- 新增篮子走 `save_basket` 的 `create: true`，`key` 已存在则报错（重复检测）；重命名走 `rename_basket`（改 key + 文件名 + 迁移预设引用）
 - `mutually_exclusive: true` 时**不要**再配 `conflicts`（互斥已保证单值，conflicts 冗余）
 - `condition.任务类型` 只能是四类之一：`文生图(T2I)` / `图生图(I2I)` / `文生视频(T2V)` / `图生视频(I2V)`
 - 同一 `section` 的文件，`section_title` 必须一致

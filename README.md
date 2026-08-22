@@ -20,11 +20,9 @@
 
 补全「图片反推 → tag 集合 → 预设复用 → 增强器应用」链路，完整设计见 [docs/DESIGN.md](docs/DESIGN.md) §5-§7：
 
-- **Tag_Reverse（中间节点直出）**：反推文字 + LLM → `tag集合JSON`（matched，喂下游）+ `反推结果`（完整，面板直出）。面板两块：匹配结果（`篮子>tag` chip + 存为预设）/ 建议批准（采纳 = 写篮子库 + 并入匹配）
-- **Tag_Library**：tag/篮子/预设 三层管理；应用预设 = 覆盖所涉篮子
-- **预设系统**：`presets/*.json`（格式见 [docs/PRESET_SPEC.md](docs/PRESET_SPEC.md)），增强器「预设」tab 一键应用
-- **直出机制**：ComfyUI 1.48 的 `executed` 事件只发显示节点 → 从显示节点回溯上游 Tag_Reverse → 读 `output.text[0]` 渲染；不轮询、不存后端反推状态
-- **重启**：不自建——ComfyUI-Manager 菜单自带「Restart」按钮（走 `/manager/reboot`）
+- **Tag_Reverse「Tag 反推」**：反推参考图 → 匹配的 tag 集合（可喂下游）+ 新 tag 建议（逐条采纳 / 全部采纳，采纳即写入篮子库）
+- **Tag_Library「Tag 库编辑」**：篮子/预设的增删改查 + tag 管理（编辑引导语；篮子名即 key/文件名，重命名自动迁移预设引用）
+- **预设系统**：把 tag 集合存为预设，增强器「预设」tab 一键应用（格式见 [docs/PRESET_SPEC.md](docs/PRESET_SPEC.md)）
 
 ## 任务模版文件夹（templates/）
 
@@ -52,8 +50,6 @@
 
 **输出**：提示词（STRING）。陷阱：任务类型选 base 输出三字段，与 ref2va 节点不匹配——锁「全参考模式」用。
 
-**实现要点**：无第三方 HTTP 依赖（urllib 双接口：Anthropic 兼容 `/v1/messages` + OpenAI 兼容 `/chat/completions`）；`thinking: disabled` 必开（v4-flash 推理模型不开会吃光 max_tokens）；system prompt 外置 txt（改即生效、不重启）。
-
 ## 节点 2：LLM API 设定器
 
 | 输入 | 类型 | 默认 | 说明 |
@@ -66,9 +62,7 @@
 | 最大token | INT | 8192 | — |
 | 支持视觉 | combo | 否 | 该 LLM 是否支持图片输入（GLM-4V/Qwen-VL/Gemini 等选「是」；deepseek 纯文本选「否」）。增强器接图时据此判断 |
 
-**输出**：LLM（`LLM_CONFIG` 自定义类型）。设定时即验证 key/模型/URL 存在。节点标题栏右侧显示 **token 用量圆角胶囊徽章**（仿官方 partner 节点 price_badge 样式）：`本次↑x/↓y·n次`（由下游增强器/H3 调用后更新，未调用时隐藏）。
-
-**实现要点**：LLM 连接解耦（设定器输出 `LLM_CONFIG` 自定义类型，下游连线接收——换 LLM 只改设定器）；key 从环境变量读、不落工作流明文（`os.environ.get(APIKey环境变量)`，回退 `ANTHROPIC_AUTH_TOKEN`）。
+**输出**：LLM（`LLM_CONFIG` 自定义类型）。设定时即验证 key/模型/URL 存在。token 用量在**下游消费节点**（增强器/H3/反推）执行后显示到各节点**信息栏**，此处不展示。
 
 ### API Key 环境变量设置
 
@@ -116,28 +110,21 @@ LLM 设定器节点可指定 `APIKey环境变量`（如换 GLM 用 `ZHIPUAI_API_
 | **内容设置** | 用户提示词、参考图（可选）+ 内容篮子（主题风格、艺术风格、景别、机位高度、视角朝向、光线、氛围情绪、身材、人物姿势、镜头运动等；按任务类型动态显隐，本地可扩展） |
 | **输出设置** | 输出格式（自然语言/Tag/混合）、输出结构（连贯/分段标题）、输出语言、输出长度、带负面提示词 |
 
-外加固定项：`LLM`（连线）、`系统提示词文件`。
+外加固定项：`LLM`（连线）、`二次优化`（开关，默认关）、`系统提示词文件`（排节点最底部）。
 
 **输出**：`提示词` + `负面提示词`（双 STRING 端口；带负面提示词=是 时负面端口有值，内置基础词库 + LLM 补充本次特定项）。
 
-**核心机制**：
-- **预制篮子多选**：内容层每个分类是一个「篮子」（预设 tag 池），点 chip 多选进篮子，可自由组合（主题风格选「仙侠+古风」、光线选「晨光+逆光」）。值存隐藏 state widget（JSON），ComfyUI 序列化
-- **清空/随机篮子按钮**：面板顶部一键清空所有篮子 / 每篮子随机选 1 个 tag
-- **tag 是建议 + 风格强约束**：篮子 tag 定基调；艺术风格/主题风格是**强约束**——选了必须体现核心视觉特征（配特点词表）
-- **外部字典 + 篮子文件**：`dict.json` 定义非篮子控件；`baskets/` 目录一个篮子一个文件（自动合并）。加篮子/加值 = 加文件/改 JSON，不改代码
-- **任务类型动态显隐**：前端按任务类型显示/隐藏内容分类 tab（选视频→镜头运动等出现；选图→隐藏）
-- **text 是用户自由定制入口**：字典给结构约束，text 给内容自由度；未选维度 LLM 自动补全
-- **参考图**：可选 IMAGE 输入，仅当 LLM 设定器「支持视觉=是」时转 base64 传 LLM 多模态；否则忽略（降级纯文本）
-- **约束自检**：`mutually_exclusive`（整栏互斥：景别/机位/视角/艺术风格等）+ `conflicts`（冲突对：硬光vs柔光等）+ 跨字段矛盾（gate 字段未选但依赖字段有值）——拼接前校验，报错拦截
-- **输出后处理**：分段标题压缩多余空行（连续 2+ 空行→1）
-- **token 用量**：消费节点执行后从 `GET /llm_usage/last` 读本次用量，标题栏显示 `本次↑x/↓y`
-- **自定义前端**：`web/prompt_enhancer_ui.js` 用 `addDOMWidget` 渲染 chip 多选 + Tab 分类 + 汇总框（`bsawang.basket` 标记），Vue 模式兼容
-- 增强规则来自描述圣经：文生图→四层结构、图生图→只补缺失、文生视频→静态基础+时间轴、图生视频→只写运动增量
-- **一致性规则**（txt）：身体朝向一致（禁止朝向反转）、景别-画幅一致（远景人物占比小）、主题/艺术风格强约束配特点词表
+**功能**：
+- **内容篮子多选**：主题/构图/光线/氛围/身材等分类点 chip 多选、自由组合；清空/随机按钮一键操作；按任务类型动态显隐
+- **tag 优先于用户输入**：已选 tag 的内容优先于提示词原文，冲突时以 tag 为准（例：选了「光线=蝴蝶光」而提示词写「逆光」，按蝴蝶光呈现）
+- **二次优化**（开关，默认关）：增强后多一次校验，输出更贴已选 tag（代价：多一次 LLM 调用）
+- **约束自检**：互斥/冲突/跨字段矛盾自动拦截报错
+- **预设一键应用**：预设 tab 点选即覆盖所涉篮子
+- **支持参考图**（I2I/I2V 可选，需 LLM 设定器「支持视觉=是」）
+- **负面提示词**：可选输出（内置基础词库 + 本次特定项）
+- **token 用量**：增强器/H3/反推节点信息栏显示本次消耗
 
 > 💬 **新增篮子**：对你的 agent 说「给 bsawang-nodes 提示词增强器增加一个『XX』类型篮子」，agent 会按[篮子制作规约](docs/BASKET_SPEC.md)制作，并同步到运行副本 `custom_nodes/ComfyUI-bsawang/baskets/`。
-
-**实现要点**：外部字典 `dict.json` + `baskets/` 篮子文件动态合并（自动建 section、key 去重、order 排序）；篮子 widget（STRING 带 `bsawang.basket` 标记，前端 `addDOMWidget` 渲染 chip）；`guidance`/`option_guidance` 按选中篮子注入 system prompt（维度规则 + 特点词表）；条件字段（带 `condition` 仅匹配任务类型时拼进 user_msg——后端先行、UI 显隐后置）；种子 INT widget + `control_after_generate`；负面词基础库（`DEFAULT_NEGATIVE` 质量/解剖/安全三类）；敏感内容走 Anthropic 兼容接口；system prompt 外置 txt（改即生效、不重启）；错误透传（key/文件缺失/API 失败/空 content 均 `raise` → 节点变红）；token 统计（`llm_usage.py` 模块级累计 + `GET /llm_usage/last` 路由）。
 
 ## 相关
 

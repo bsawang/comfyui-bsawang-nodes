@@ -96,18 +96,19 @@
 - 多模态：`支持视觉=是` 且节点有参考图 → 图片 base64 转 `image` / `image_url` 传参
 - 错误透传：HTTP/结构异常/空 content 均 `raise` → 节点变红
 
-`llm_usage.py`：会话级 token 累计（输入/输出/调用次数），`GET /llm_usage/last` 读「本次」，消费节点标题栏显示用量徽章。
+`llm_usage.py`：会话级 token 累计（输入/输出/调用次数），`GET /llm_usage/last` 读「本次」，增强器/H3/反推三个消费节点执行后显示到各节点**信息栏**。
 
 ### 4.2 字典系统（dict.json + baskets/）
 
 - `dict.json`：section 骨架（type/type_info/content/output）+ 非篮子控件（任务类型/种子/视频时长/用户提示词/输出设置）
-- `baskets/*.json`：一个篮子一个文件（主题风格/构图风格/光线/景别/氛围/色彩/…含 nsfw-* 系列），含 `options/guidance/option_guidance/conflicts/mutually_exclusive/condition/gate`
+- `baskets/*.json`：一个篮子一个文件（主题风格/构图风格/光线/景别/氛围/色彩/…含 nsfw-* 系列），含 `options/guidance/option_guidance/conflicts/mutually_exclusive/condition/gate`；**无 `label` 字段**（key=label 单一模型——key 即文件名/显示名/传 LLM 的维度名）
 - **动态合并**：启动 + 刷新时按 `section.id` 定位、fields 按 key 去重追加；mtime 缓存；`GET /bsawang/prompt_enhancer/dict` 供前端「刷新字典」按钮
 - 篮子格式与制作规约见 `BASKET_SPEC.md`
 
 ### 4.3 模板系统（templates/）
 
 - 所有 system prompt 收在 `templates/`，按任务中文命名，`系统提示词文件` widget 默认指向，改 txt 即生效、不重启
+- **基座模板硬性规则**（`常规文生图.txt` 内置「必填」规则）：身体朝向一致性（人物朝向/视角/机位逻辑一致、禁止朝向反转）、景别-画幅一致性（人物占画幅比例必须匹配景别）、如实描述（已选内容要素不夸大不弱化）、**规则10 tag 优先级高于用户输入**
 - **内容锚点软耦合**（历史）：曾用模板声明【已加载tag】触发增强器注入全量篮子选项（tag 对照模式）；该模式已被 Tag_Reverse 节点取代，2026-08-22 移除
 - NSFW 变体 `{key}.nsfw.txt` 按 `.gitignore *nsfw*` 忽略（本地保留不上远程）
 
@@ -126,6 +127,9 @@
 | `/bsawang/tag/save_preset` | POST | 存预设 |
 | `/bsawang/tag/delete_preset` | POST | 删预设 |
 | `/bsawang/tag/add_basket_option` | POST | 篮子加选项（写 baskets/*.json + 失效缓存）|
+| `/bsawang/tag/save_basket` | POST | 存篮子；`create: true` = 新增去重（key 已存在报错）|
+| `/bsawang/tag/rename_basket` | POST | 重命名篮子（改 key + 文件名 + 迁移预设引用）|
+| `/bsawang/tag/save_option` / `delete_option` | POST | 篮子 tag 增改 / 删（含引导语）|
 | `/llm_usage/last` | GET | 本次 token 用量（llm_usage 模块）|
 
 ## 5. 节点详细设计
@@ -162,16 +166,19 @@
 | 内容设置 | 用户提示词 + 内容篮子（主题/构图/光线/氛围/身材/… 按任务类型动态显隐）|
 | 输出设置 | 输出格式（自然语言/Tag/混合）、结构、语言、长度、带负面提示词 |
 
-固定项：`LLM` 连线 + `系统提示词文件`。输出 `提示词` + `负面提示词`。
+固定项：`LLM` 连线 + `二次优化`（开关）+ `系统提示词文件`（widget 排节点最底部，二次优化在其前）。输出 `提示词` + `负面提示词`。
 
 **核心机制**：
-- 预制篮子多选（隐藏 state widget JSON 序列化）；tag 是建议，艺术/主题风格是强约束
+- 预制篮子多选（隐藏 state widget JSON 序列化）；**tag 强参考**：基座系统提示词规则10「tag 优先级高于用户输入」——已选 tag 的内容要素不得被用户提示词覆盖，冲突以 tag 为准
 - 约束自检：mutually_exclusive / conflicts / 跨字段 gate，拼接前校验报错
 - （tag 对照模式已移除——反推由 Tag_Reverse 节点承担，增强器不再注入全量 tag 池）
 - 任务类型动态显隐 + 增强要点外置（tasks.json）
+- **条件字段**：带 `condition` 的字段（如镜头运动）仅匹配任务类型时拼进 user_msg——后端先行、UI 显隐后置
+- **输出后处理**：分段标题压缩多余空行（连续 2+ 空行→1）
 - **预设 tab**（index 0）：读 /dict 的 presets，点预设覆盖所涉篮子
 - 负面词基础库（质量/解剖/安全三类）+ LLM 补充本次特定项
-- token 用量徽章（onExecuted → /llm_usage/last）
+- **二次优化**（`二次优化` widget 开）：第二次调用 LLM，把第一次输出与已选 tag 清单逐条核对——缺失补写、冲突/弱化以 tag 为准纠正，完整重写输出；pass2 只修正文（负面词 pass1 已拆出）、不传参考图、失败回落 pass1 输出
+- token 用量显示（**显示节点 executed → 沿输入连线回溯上游消费节点** → /llm_usage/last → 各节点信息栏；中间节点不触发 onExecuted，须走回溯，与 Tag_Reverse 直出同款）
 
 ### 5.4 Tag_Reverse「Tag 反推」（中间节点直出）
 
@@ -233,10 +240,10 @@
 
 预设 = 跨多个篮子的一组 tag 捆绑（一键填篮子），复杂风格（天宫）用它打包多维度。**完整格式/约束/质检/制作流程见 [`PRESET_SPEC.md`](PRESET_SPEC.md)**，本节只记设计要点：
 
-- 一个预设一个文件 `presets/{key}.json`：`{key, label, description, tags}`；NSFW 变体 `{key}.nsfw.json`
+- 一个预设一个文件 `presets/{key}.json`：`{key, guidance, tags}`（**无 `label` 字段，key=name=文件名单一模型**）；NSFW 变体 `{key}.nsfw.json`
 - **应用 = 覆盖所涉篮子**（替换该篮子当前选择），未涉及的篮子不动，应用后可微调
 - `tags` 的篮子 key 必须在当前字典内（不存在 → 应用跳过并提示）；tag 值不必已在篮子 options（应用只填状态，LLM 运行时把选中的 tag 传给增强器）
-- **消费方**：Tag_Reverse（存为预设）、Tag_Library（应用/存/删）、Prompt_Enhancer（「预设」tab 应用，读 /dict 的 presets 字段）
+- **消费方**：Tag_Reverse（存为预设）、Tag_Library（应用/存/删/重命名）、Prompt_Enhancer（「预设」tab 应用，读 /dict 的 presets 字段）
 - 首个预设：天宫、盗梦空间
 
 ## 7. 前端直出触发机制（关键架构决策）

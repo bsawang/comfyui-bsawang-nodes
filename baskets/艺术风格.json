@@ -1,6 +1,5 @@
 {
   "key": "艺术风格",
-  "label": "艺术风格（画风/媒介）",
   "section": "content",
   "type": "basket",
   "order": 2,
@@ -61,9 +60,21 @@
   ],
   "mutually_exclusive": true,
   "conflicts": [
-    ["超写实(photorealistic)", "水墨(ink wash)"],
-    ["超写实(photorealistic)", "油画(oil painting)"],
-    ["超写实(photorealistic)", "浮世绘(ukiyo-e)"],
-    ["电影感(cinematic)", "像素风(pixel art)"]
+    [
+      "超写实(photorealistic)",
+      "水墨(ink wash)"
+    ],
+    [
+      "超写实(photorealistic)",
+      "油画(oil painting)"
+    ],
+    [
+      "超写实(photorealistic)",
+      "浮世绘(ukiyo-e)"
+    ],
+    [
+      "电影感(cinematic)",
+      "像素风(pixel art)"
+    ]
   ]
 }

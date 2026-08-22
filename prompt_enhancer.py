@@ -186,7 +186,7 @@ def _presets_stamp():
 
 
 def _load_presets() -> dict:
-    """读取 presets/ 目录全部预设（mtime 缓存）：{key: {key,label,description,tags}}。"""
+    """读取 presets/ 目录全部预设（mtime 缓存）：{key: {key,guidance,tags}}。"""
     try:
         stamp = _presets_stamp()
     except OSError:
@@ -202,7 +202,6 @@ def _load_presets() -> dict:
                 key = (d.get("key") or "").strip() or p.stem
                 presets[key] = {
                     "key": key,
-                    "label": d.get("label", key),
                     "guidance": d.get("guidance", ""),
                     "tags": d.get("tags", {}) or {},
                 }
@@ -211,11 +210,14 @@ def _load_presets() -> dict:
     return _PRESET_CACHE["data"]
 
 
-def _save_preset(name, tags, label=None, guidance=""):
-    """写 presets/{name}.json（同名幂等覆盖）。返回安全 key。"""
+def _save_preset(name, tags, guidance="", create_only=False):
+    """创建或更新预设。create_only=True 且已存在 → 报错（新增去重）；写 presets/{name}.json。返回安全 key。"""
     name = (name or "").strip().replace("/", "_").replace("\\", "_")
     if not name:
         raise ValueError("[Tag] 预设名不能为空")
+    path = PRESETS_DIR / f"{name}.json"
+    if path.exists() and create_only:
+        raise ValueError(f"[Tag] 预设「{name}」已存在，请勿重复新增")
     # 自检：篮子 key 存在 + 组合约束（互斥/冲突/跨字段 gate）——坏预设任何入口都存不进去
     for bk in (tags or {}):
         if _basket_options(bk) is None:
@@ -225,14 +227,11 @@ def _save_preset(name, tags, label=None, guidance=""):
         raise ValueError("[Tag] 预设组合自检失败：\n" + "\n".join("  - " + e for e in errs))
     data = {
         "key": name,
-        "label": label or name,
         "guidance": guidance or "",
         "tags": tags or {},
     }
     PRESETS_DIR.mkdir(parents=True, exist_ok=True)
-    (PRESETS_DIR / f"{name}.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     _PRESET_CACHE["data"] = None
     _bump_lib_version()
     return name
@@ -246,6 +245,28 @@ def _delete_preset(name):
     _PRESET_CACHE["data"] = None
     _bump_lib_version()
     return True
+
+
+def _rename_preset(old_name, new_name, tags, guidance=""):
+    """重命名预设：key+文件名一起改（key=name=文件名单一模型）。"""
+    old_name = (old_name or "").strip().replace("/", "_").replace("\\", "_")
+    new_name = (new_name or "").strip().replace("/", "_").replace("\\", "_")
+    if not old_name or not new_name:
+        raise ValueError("[Tag] 预设名不能为空")
+    if old_name == new_name:
+        raise ValueError("[Tag] 新旧预设名相同，无需重命名")
+    old_path = PRESETS_DIR / f"{old_name}.json"
+    if not old_path.exists():
+        raise ValueError(f"[Tag] 预设文件不存在：{old_name}")
+    new_path = PRESETS_DIR / f"{new_name}.json"
+    if new_path.exists():
+        raise ValueError(f"[Tag] 预设「{new_name}」已存在，无法重命名")
+    data = {"key": new_name, "guidance": guidance or "", "tags": tags or {}}
+    new_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    old_path.unlink()
+    _PRESET_CACHE["data"] = None
+    _bump_lib_version()
+    return new_name
 
 
 def _read_basket_file(basket):
@@ -265,26 +286,63 @@ def _write_basket_file(basket, data):
     _bump_lib_version()
 
 
-def _save_basket(key, label=None, guidance=None):
-    """创建或更新篮子 meta。key 已存在 → 改 label/guidance；不存在 → 新建（content section，空 options）。"""
+def _save_basket(key, guidance=None, create_only=False):
+    """创建或更新篮子 meta。create_only=True 且 key 已存在 → 报错（新增去重）；不存在 → 新建（content section，空 options）。"""
     key = (key or "").strip()
     if not key:
         raise ValueError("[Tag] 篮子 key 不能为空")
     path = BASKETS_DIR / f"{key}.json"
     if path.exists():
+        if create_only:
+            raise ValueError(f"[Tag] 篮子「{key}」已存在，请勿重复新增")
         bf = json.loads(path.read_text(encoding="utf-8"))
     else:
         bf = {
-            "key": key, "label": label or key, "section": "content", "type": "basket",
+            "key": key, "section": "content", "type": "basket",
             "options": [], "guidance": [], "option_guidance": {},
         }
-    if label is not None:
-        bf["label"] = (label or key).strip() or key
     if guidance is not None:
         g = (guidance or "").strip()
         bf["guidance"] = [g] if g else []
     _write_basket_file(key, bf)
     return key
+
+
+def _rename_basket(old_key, new_key, guidance=None):
+    """重命名篮子：key+文件名一起改（key=label 单一模型），并迁移预设引用。"""
+    old_key = (old_key or "").strip()
+    new_key = (new_key or "").strip()
+    if not old_key or not new_key:
+        raise ValueError("[Tag] 篮子 key 不能为空")
+    if old_key == new_key:
+        raise ValueError("[Tag] 新旧 key 相同，无需重命名")
+    old_path = BASKETS_DIR / f"{old_key}.json"
+    if not old_path.exists():
+        raise ValueError(f"[Tag] 篮子文件不存在：{old_key}")
+    new_path = BASKETS_DIR / f"{new_key}.json"
+    if new_path.exists():
+        raise ValueError(f"[Tag] 篮子「{new_key}」已存在，无法重命名")
+    bf = json.loads(old_path.read_text(encoding="utf-8"))
+    bf["key"] = new_key
+    if guidance is not None:
+        g = (guidance or "").strip()
+        bf["guidance"] = [g] if g else []
+    new_path.write_text(json.dumps(bf, ensure_ascii=False, indent=2), encoding="utf-8")
+    old_path.unlink()
+    # 迁移预设引用：presets/*.json 的 tags 里旧 key → 新 key
+    if PRESETS_DIR.is_dir():
+        for p in sorted(PRESETS_DIR.glob("*.json")):
+            try:
+                pf = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            tags = pf.get("tags") or {}
+            if old_key in tags:
+                tags[new_key] = tags.pop(old_key)
+                p.write_text(json.dumps(pf, ensure_ascii=False, indent=2), encoding="utf-8")
+    _DICT_CACHE["data"] = None
+    _bump_lib_version()
+    return new_key
 
 
 def _delete_basket(key):
@@ -577,6 +635,7 @@ class Prompt_Enhancer:
                 "bsawang.basketMeta": basket_meta,
             },
         )
+        required["二次优化"] = (["否", "是"], {"default": "否", "tooltip": "开：第二次调用 LLM，把第一次输出与已选 tag 逐条核对——缺失补写、冲突/弱化以 tag 为准纠正，完整重写输出（多一次 LLM 调用）"})
         required["系统提示词文件"] = (
             "STRING",
             {"default": str(NODE_DIR / "templates" / "常规文生图.txt"), "tooltip": "增强规则 system prompt；文件缺失/读取失败时回落内置默认"},
@@ -708,6 +767,7 @@ class Prompt_Enhancer:
         输出语言 = kw.get("输出语言", "中文")
         输出长度 = kw.get("输出长度", "标准")
         带负面提示词 = kw.get("带负面提示词", "否")
+        二次优化 = kw.get("二次优化", "否")
 
         # 从 tasks.json 取当前任务类型的增强要点（外置可改）
         task_tpl = TASKS.get(任务类型, {})
@@ -749,14 +809,9 @@ class Prompt_Enhancer:
 
         种子 = int(kw.get("种子", 0) or 0)
 
-        if 接口格式.startswith("Anthropic"):
-            content, usage_snap = self._call_anthropic(
-                api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
-            )
-        else:
-            content, usage_snap = self._call_openai(
-                api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
-            )
+        content, _usage = self._call_llm(
+            接口格式, api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
+        )
 
         # 拆分负面提示词：主调用已让 LLM 输出「正文 + 负面提示词: ...」行
         负面提示词 = ""
@@ -770,7 +825,57 @@ class Prompt_Enhancer:
         # 压缩多余空行：连续 2+ 空行压成 1 个空行（分段标题间保持 1 空行）
         content = _collapse_blank_lines(content)
 
+        # 二次优化：把第一次输出与已选 tag 清单逐条核对，缺失补写、冲突/弱化以 tag 为准纠正，完整重写
+        if 二次优化 == "是" and content.strip():
+            try:
+                content = self._second_pass_verify(
+                    接口格式, api_key, tag_lines, content, text, 场景环境,
+                    模型, API基础URL, 温度, 最大token, 种子,
+                )
+                content = _collapse_blank_lines(content)
+            except Exception:
+                pass  # 二次优化失败不阻断，回落第一次输出
+
         return (content, 负面提示词)
+
+    def _call_llm(
+        self, 接口格式, api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
+    ):
+        """统一 LLM 调用分发（Anthropic 兼容 / OpenAI 兼容）。"""
+        if 接口格式.startswith("Anthropic"):
+            return self._call_anthropic(
+                api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
+            )
+        return self._call_openai(
+            api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
+        )
+
+    def _second_pass_verify(
+        self, 接口格式, api_key, tag_lines, content, text, 场景环境,
+        模型, API基础URL, 温度, 最大token, 种子,
+    ):
+        """二次优化：把第一次输出与已选 tag 清单逐条核对，缺失补写、冲突/弱化以 tag 为准纠正，完整重写。"""
+        system = (
+            "你是提示词质检员。把【第一次增强输出】与【已选 tag 清单】逐条核对，按以下规则修订：\n"
+            "① 已正确体现的 tag → 原样保留，不改动；\n"
+            "② 缺失的 tag → 按该维度语义补写进正文对应位置；\n"
+            "③ 与 tag 冲突、被弱化的内容 → 一律以 tag 为准纠正（tag 优先级高于用户输入：如 tag 要求蝴蝶光，正文却写逆光 → 改为蝴蝶光）；\n"
+            "④ 只修订 tag 相关部分，未涉及的内容保持不动；\n"
+            "⑤ 完整重写并输出修订后的正文，保持第一次输出的格式/语言/长度/结构；\n"
+            "⑥ 只输出修订后的正文本身，不要前言、解释、markdown 代码块，不要输出负面提示词。"
+        )
+        checklist = "\n".join(tag_lines) if tag_lines else "（无已选 tag）"
+        user_msg = (
+            f"【已选 tag 清单】\n{checklist}\n\n"
+            f"【第一次增强输出】\n{content}\n\n"
+            f"【用户提示词原文】\n{text}"
+            + (f"\n\n【场景环境】\n{场景环境}" if 场景环境 else "")
+            + "\n\n请逐条核对每个 tag 是否在输出中得到体现：缺失→补写、冲突/弱化→以 tag 为准纠正、已体现→保留。完整重写输出修订后的正文。"
+        )
+        revised, _usage = self._call_llm(
+            接口格式, api_key, system, user_msg, 模型, API基础URL, 温度, 最大token, None, 种子
+        )
+        return revised.strip()
 
     # ---- Anthropic 兼容（/v1/messages + thinking disabled）----
     def _call_anthropic(
@@ -919,7 +1024,6 @@ def setup_routes(server):
             for field in section["fields"]:
                 if field.get("type") == "basket":
                     baskets[field["key"]] = {
-                        "label": field.get("label", field["key"]),
                         "options": field.get("options", []),
                         "guidance": field.get("guidance", []),
                         "option_guidance": field.get("option_guidance", {}),
@@ -933,8 +1037,16 @@ def setup_routes(server):
     async def handle_save_preset(request):
         try:
             body = await request.json()
-            name = _save_preset(body.get("name"), body.get("tags") or {}, body.get("label"), body.get("guidance", ""))
+            name = _save_preset(body.get("name"), body.get("tags") or {}, body.get("guidance", ""), body.get("create"))
             return web.json_response({"ok": True, "key": name})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_rename_preset(request):
+        try:
+            body = await request.json()
+            new_name = _rename_preset(body.get("old_name"), body.get("new_name"), body.get("tags") or {}, body.get("guidance", ""))
+            return web.json_response({"ok": True, "key": new_name})
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400)
 
@@ -949,8 +1061,16 @@ def setup_routes(server):
     async def handle_save_basket(request):
         try:
             body = await request.json()
-            key = _save_basket(body.get("key"), body.get("label"), body.get("guidance"))
+            key = _save_basket(body.get("key"), body.get("guidance"), body.get("create"))
             return web.json_response({"ok": True, "key": key})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def handle_rename_basket(request):
+        try:
+            body = await request.json()
+            new_key = _rename_basket(body.get("old_key"), body.get("new_key"), body.get("guidance"))
+            return web.json_response({"ok": True, "key": new_key})
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400)
 
@@ -988,8 +1108,10 @@ def setup_routes(server):
 
     server.routes.get("/bsawang/tag/dict")(handle_tag_dict)
     server.routes.post("/bsawang/tag/save_preset")(handle_save_preset)
+    server.routes.post("/bsawang/tag/rename_preset")(handle_rename_preset)
     server.routes.post("/bsawang/tag/delete_preset")(handle_delete_preset)
     server.routes.post("/bsawang/tag/save_basket")(handle_save_basket)
+    server.routes.post("/bsawang/tag/rename_basket")(handle_rename_basket)
     server.routes.post("/bsawang/tag/delete_basket")(handle_delete_basket)
     server.routes.post("/bsawang/tag/save_option")(handle_save_option)
     server.routes.post("/bsawang/tag/delete_option")(handle_delete_option)

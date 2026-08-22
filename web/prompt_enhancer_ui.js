@@ -23,36 +23,11 @@ function hideWidget(w) {
     w.serialize = true;
 }
 
-// ---------- LLM token 用量显示（消费节点标题栏，只显示本次，轻量） ----------
+// ---------- LLM token 用量显示（增强器面板信息栏展示，只显示本次，轻量） ----------
 function fmtTokens(n) {
     if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
-    if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+    if (n >= 1000) return (n / 1000).toFixed(1) + "K";
     return String(n);
-}
-
-function showUsageOnNode(node) {
-    // 从后端 GET /llm_usage/last 读「本次」用量，追加到节点标题
-    fetch("/llm_usage/last").then(r => r.json()).then(u => {
-        if (!u || !node) return;
-        const tin = Number(u["本次输入token"]) || 0;
-        const tout = Number(u["本次输出token"]) || 0;
-        if (tin === 0 && tout === 0) return;
-        const label = `本次↑${fmtTokens(tin)}/↓${fmtTokens(tout)}`;
-        // 追加到标题：把 token 记到节点标题栏右侧徽章
-        const header = node.el?.querySelector?.(".lg-node-header");
-        const row = header?.querySelector?.(".justify-between");
-        if (!row) return;
-        let badge = row.querySelector("[data-bsawang-usage]");
-        if (!badge) {
-            badge = document.createElement("span");
-            badge.setAttribute("data-bsawang-usage", "1");
-            badge.className = "flex h-5 shrink-0 items-center bg-component-node-widget-background p-1 text-xs rounded-full";
-            badge.style.cssText = "margin-left:auto;white-space:nowrap;font-family:Arial,sans-serif;color:#a0a0a0;";
-            row.appendChild(badge);
-        }
-        badge.textContent = label;
-        badge.style.display = "";
-    }).catch(() => {}); // 用量徽章非关键：读取失败静默，不落 console
 }
 
 // ---------- 面板构建 ----------
@@ -178,6 +153,19 @@ function createPanel(node, nodeData) {
         statusIcon.textContent = ok === false ? "✗" : (ok ? "✓" : "ℹ");
         statusIcon.style.color = ok === false ? "#e06c75" : (ok ? "#8fd0a0" : "#7fb0c4");
     }
+    // LLM 调用完成后：从后端读本次 token，展示在信息栏（报错态优先保留，不覆盖）
+    function showUsage() {
+        fetch("/llm_usage/last").then(r => r.json()).then(u => {
+            if (!u || statusIcon.textContent === "✗") return; // 报错优先，不覆盖
+            const tin = Number(u["本次输入token"]) || 0;
+            const tout = Number(u["本次输出token"]) || 0;
+            if (tin === 0 && tout === 0) return;
+            const cin = Number(u["累计输入token"]) || 0;
+            const cout = Number(u["累计输出token"]) || 0;
+            setStatus(`↑ ${fmtTokens(tin)} ↓ ${fmtTokens(tout)} | ↑ ${fmtTokens(cin)} ↓ ${fmtTokens(cout)}`, true);
+        }).catch(() => {}); // 用量非关键：读取失败静默
+    }
+    node._bsawangShowUsage = showUsage;
 
     // 前端组合自检：与后端 _collect_basket_errors 同规则（互斥/冲突），出错显示在信息栏
     function validateState() {
@@ -333,7 +321,7 @@ function createPanel(node, nodeData) {
         }
         for (const n of names) {
             const p = presets[n];
-            const chip = make("span", {}, p.label || n);
+            const chip = make("span", {}, n);
             chip.className = "bsa-chip";
             chip.title = p.guidance ? p.guidance.slice(0, 60) + "…" : `应用「${n}」：覆盖所涉篮子（可再微调）`;
             chip.addEventListener("click", () => {
@@ -512,9 +500,73 @@ function createPanel(node, nodeData) {
     return true;
 }
 
+// H3 格式化节点：原无面板，补最小信息栏展示 token 用量（与增强器信息栏同风格）
+function createH3Panel(node) {
+    if (typeof node.addDOMWidget !== "function") return false;
+    const root = make("div", {
+        position: "relative", width: "100%", boxSizing: "border-box",
+        color: "#d7e3ef", fontFamily: "Arial,sans-serif", fontSize: "12px",
+        padding: "6px 8px", border: "1px solid #2d4255", borderRadius: "8px", background: "#101b26",
+    });
+    const statusIcon = make("span", {}, "ℹ"); statusIcon.style.cssText = "font-weight:600";
+    const statusTextEl = make("span", { flex: "1" }, "就绪");
+    const statusEl = make("div", {});
+    statusEl.style.cssText = "display:flex;align-items:center;gap:6px;color:#7fb0c4;font-size:11px";
+    statusEl.appendChild(statusIcon); statusEl.appendChild(statusTextEl);
+    root.appendChild(statusEl);
+    function showUsage() {
+        fetch("/llm_usage/last").then(r => r.json()).then(u => {
+            if (!u) return;
+            const tin = Number(u["本次输入token"]) || 0;
+            const tout = Number(u["本次输出token"]) || 0;
+            if (tin === 0 && tout === 0) return;
+            const cin = Number(u["累计输入token"]) || 0;
+            const cout = Number(u["累计输出token"]) || 0;
+            statusTextEl.textContent = `↑ ${fmtTokens(tin)} ↓ ${fmtTokens(tout)} | ↑ ${fmtTokens(cin)} ↓ ${fmtTokens(cout)}`;
+            statusIcon.textContent = "✓";
+            statusIcon.style.color = "#8fd0a0";
+        }).catch(() => {}); // 用量非关键：读取失败静默
+    }
+    node._bsawangShowUsage = showUsage;
+    node.addDOMWidget("bsawang_h3_usage", "bsawang_h3_usage", root, { serialize: false, hideOnZoom: false });
+    return true;
+}
+
+// 从显示节点沿输入连线回溯，找挂了 token 展示的消费节点（增强器/H3）
+function findUpstreamUsageNode(node, visited) {
+    if (!node) return null;
+    if (typeof node._bsawangShowUsage === "function") return node;
+    visited = visited || new Set();
+    if (visited.has(node.id)) return null;
+    visited.add(node.id);
+    for (const input of node.inputs || []) {
+        const link = app.graph?.links?.[input.link];
+        if (!link) continue;
+        const src = app.graph?.getNodeById?.(link.origin_id)
+            || app.graph?.nodes?.find?.((n) => String(n.id) === String(link.origin_id));
+        const found = findUpstreamUsageNode(src, visited);
+        if (found) return found;
+    }
+    return null;
+}
+
 // ---------- 注册 ----------
 app.registerExtension({
     name: "bsawang.prompt_enhancer",
+    async setup() {
+        // executed 事件只发显示节点（PreviewAny 等），中间节点（增强器/H3）不触发——
+        // 从显示节点回溯上游找挂 token 展示的消费节点（与 Tag_Reverse 同款方案）
+        const api = app.api || window.comfyAPI?.api;
+        api?.addEventListener?.("executed", ({ detail }) => {
+            const nid = detail?.node ?? detail?.node_id;
+            if (nid == null) return;
+            const node = app.graph?.getNodeById?.(nid)
+                || app.graph?.nodes?.find?.((n) => String(n.id) === String(nid));
+            if (!node) return;
+            const usageNode = findUpstreamUsageNode(node);
+            if (usageNode) usageNode._bsawangShowUsage();
+        });
+    },
     async beforeRegisterNodeDef(nodeType, nodeData) {
         const name = nodeData.name;
         if (name !== NODE && name !== "H3_API_PromptFormatter") return;
@@ -522,14 +574,16 @@ app.registerExtension({
         const previous = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const result = previous?.apply(this, arguments);
-            if (isEnhancer && !this._bsawangBasketReady && createPanel(this, nodeData)) {
-                this._bsawangBasketReady = true;
+            if (isEnhancer) {
+                if (!this._bsawangBasketReady && createPanel(this, nodeData)) this._bsawangBasketReady = true;
+            } else if (name === "H3_API_PromptFormatter" && !this._bsawangH3Ready) {
+                this._bsawangH3Ready = createH3Panel(this) === true;
             }
-            // LLM 调用完成后：从后端读本次 token，追加到消费节点标题栏
+            // LLM 调用完成后：从后端读本次 token，展示在增强器面板信息栏（报错态优先保留）
             const prevExecuted = this.onExecuted;
             this.onExecuted = function (message) {
                 if (typeof prevExecuted === "function") prevExecuted.apply(this, arguments);
-                showUsageOnNode(this);
+                if (typeof this._bsawangShowUsage === "function") this._bsawangShowUsage();
             };
             return result;
         };

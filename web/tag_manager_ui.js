@@ -12,6 +12,11 @@ function make(tag, css = {}, text = "") {
     if (text) el.textContent = text;
     return el;
 }
+function fmtTokens(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+    if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+    return String(n);
+}
 function hideWidget(w) {
     if (!w) return;
     w.hidden = true;
@@ -132,7 +137,7 @@ function createReversePanel(node, nodeData) {
         const name = (nameInput.value || "").trim();
         if (!name) { statusText = "请先输入预设名称"; renderStatus(); return; }
         try {
-            await api("/bsawang/tag/save_preset", { name, guidance: (guidIn.value || "").trim(), tags: JSON.parse(JSON.stringify(state)) });
+            await api("/bsawang/tag/save_preset", { name, guidance: (guidIn.value || "").trim(), tags: JSON.parse(JSON.stringify(state)), create: true });
             statusText = `已保存预设「${name}」→ presets/${name}.json`;
         } catch (e) { statusText = "保存失败：" + e.message; }
         nameInput.value = "";
@@ -214,6 +219,20 @@ function createReversePanel(node, nodeData) {
         }
     }
     function renderStatus() { statusTextEl.textContent = statusText; }
+    // LLM 调用完成后：从后端读本次 token，展示在信息栏
+    function showUsage() {
+        fetch("/llm_usage/last").then(r => r.json()).then(u => {
+            if (!u) return;
+            const tin = Number(u["本次输入token"]) || 0;
+            const tout = Number(u["本次输出token"]) || 0;
+            if (tin === 0 && tout === 0) return;
+            const cin = Number(u["累计输入token"]) || 0;
+            const cout = Number(u["累计输出token"]) || 0;
+            statusText = `↑ ${fmtTokens(tin)} ↓ ${fmtTokens(tout)} | ↑ ${fmtTokens(cin)} ↓ ${fmtTokens(cout)}`;
+            renderStatus();
+        }).catch(() => {}); // 用量非关键：读取失败静默
+    }
+    node._bsawangShowUsage = showUsage;
 
     // 直出：节点输出的「反推结果」（完整 {matched, suggestions, 反推文字}）→ 渲染两块
     function applyResult(full) {
@@ -285,7 +304,7 @@ function createLibraryPanel(node, nodeData) {
     function tagsOf(key) { return Array.isArray(state[key]) ? state[key].filter((t) => t) : []; }
     function setTags(key, tags) { state[key] = [...new Set(tags)]; persistState(); }
 
-    let baskets = {};   // {key: {label, options, guidance, option_guidance, ...}}
+    let baskets = {};   // {key: {options, guidance, option_guidance, ...}}
     let presets = {};   // {key: {label, description, tags}}
     let statusText = "";
     const basketKeys = () => Object.keys(baskets);
@@ -390,15 +409,14 @@ function createLibraryPanel(node, nodeData) {
         // 编辑区：新增表单（key 由 label 自动生成）或 选中篮子的编辑
         if (basketTarget.type === "add") {
             const ar = make("div", {}); ar.className = "btm-row"; ar.style.cssText = "margin-bottom:6px";
-            const aLabel = make("input", {}, ""); aLabel.type = "text"; aLabel.className = "btm-input"; aLabel.style.cssText = "flex:1"; aLabel.placeholder = "名称（key 自动生成）";
+            const aLabel = make("input", {}, ""); aLabel.type = "text"; aLabel.className = "btm-input"; aLabel.style.cssText = "flex:1"; aLabel.placeholder = "名称（即 key / 文件名）";
             const aOk = make("button", {}, "√"); aOk.className = "btm-btn btm-icon-btn green"; aOk.innerHTML = ICON_OK;
             aOk.addEventListener("click", async () => {
-                const label = (aLabel.value || "").trim();
-                if (!label) { setStatus("请填名称", false); return; }
-                const key = label;   // key 由 label 自动生成
+                const key = (aLabel.value || "").trim();
+                if (!key) { setStatus("请填名称", false); return; }
                 const g = (aGuid.value || "").trim();
                 try {
-                    await api("/bsawang/tag/save_basket", { key, label, guidance: g ? `**${label}** = ${g}` : "" });
+                    await api("/bsawang/tag/save_basket", { key, guidance: g ? `**${key}** = ${g}` : "", create: true });
                     setStatus(`已建篮子「${key}」`, true); await refreshDict();
                     basketTarget = { type: "edit", key };
                 } catch (e) { setStatus("失败：" + e.message, false); }
@@ -411,14 +429,22 @@ function createLibraryPanel(node, nodeData) {
             const k = basketTarget.key;
             const b = baskets[k] || {};
             const er = make("div", {}); er.className = "btm-row"; er.style.cssText = "margin-bottom:6px";
-            const nameIn = make("input", {}, ""); nameIn.type = "text"; nameIn.className = "btm-input"; nameIn.style.cssText = "flex:1;min-width:100px"; nameIn.value = b.label || k;
+            const nameIn = make("input", {}, ""); nameIn.type = "text"; nameIn.className = "btm-input"; nameIn.style.cssText = "flex:1;min-width:100px"; nameIn.value = k;
             const btnSave = make("button", {}, "√"); btnSave.className = "btm-btn btm-icon-btn green"; btnSave.innerHTML = ICON_OK;
             btnSave.addEventListener("click", async () => {
                 try {
-                    const label = (nameIn.value || "").trim() || k;
+                    const newName = (nameIn.value || "").trim();
                     const g = (guidIn.value || "").trim();
-                    await api("/bsawang/tag/save_basket", { key: k, label, guidance: g ? `**${label}** = ${g}` : "" });
-                    setStatus(`已存篮子「${k}」`, true); await refreshDict();
+                    if (newName && newName !== k) {
+                        // 名称变更 → key+文件名一起改（key=label 单一模型），并迁移预设引用
+                        await api("/bsawang/tag/rename_basket", { old_key: k, new_key: newName, guidance: g ? `**${newName}** = ${g}` : "" });
+                        setStatus(`已重命名「${k}」→「${newName}」`, true);
+                        basketTarget = { type: "edit", key: newName };
+                    } else {
+                        await api("/bsawang/tag/save_basket", { key: k, guidance: g ? `**${newName || k}** = ${g}` : "" });
+                        setStatus(`已存篮子「${k}」`, true);
+                    }
+                    await refreshDict();
                 } catch (e) { setStatus("失败：" + e.message, false); }
             });
             const btnDel = makeIconBtn(ICON_DEL, "删除", async () => {
@@ -515,15 +541,15 @@ function createLibraryPanel(node, nodeData) {
 
         if (presetTarget.type === "add") {
             const ar = make("div", {}); ar.className = "btm-row"; ar.style.cssText = "margin-bottom:6px";
-            const aLabel = make("input", {}, ""); aLabel.type = "text"; aLabel.className = "btm-input"; aLabel.style.cssText = "flex:1"; aLabel.placeholder = "名称（key 自动生成）";
+            const aLabel = make("input", {}, ""); aLabel.type = "text"; aLabel.className = "btm-input"; aLabel.style.cssText = "flex:1"; aLabel.placeholder = "名称（即 key / 文件名）";
             const aOk = make("button", {}, "√"); aOk.className = "btm-btn btm-icon-btn green"; aOk.innerHTML = ICON_OK;
             aOk.addEventListener("click", async () => {
-                const label = (aLabel.value || "").trim();
-                if (!label) { setStatus("请填名称", false); return; }
+                const key = (aLabel.value || "").trim();
+                if (!key) { setStatus("请填名称", false); return; }
                 try {
-                    await api("/bsawang/tag/save_preset", { name: label, label, guidance: aGuidance.value, tags: {} });
-                    setStatus(`已建预设「${label}」`, true); await refreshDict();
-                    presetTarget = { type: "edit", key: label };
+                    await api("/bsawang/tag/save_preset", { name: key, guidance: aGuidance.value, tags: {}, create: true });
+                    setStatus(`已建预设「${key}」`, true); await refreshDict();
+                    presetTarget = { type: "edit", key };
                 } catch (e) { setStatus("失败：" + e.message, false); }
             });
             ar.appendChild(aLabel); ar.appendChild(aOk);
@@ -534,11 +560,22 @@ function createLibraryPanel(node, nodeData) {
             const k = presetTarget.key;
             const p = presets[k] || {};
             const er = make("div", {}); er.className = "btm-row"; er.style.cssText = "margin-bottom:6px";
-            const nameIn = make("input", {}, ""); nameIn.type = "text"; nameIn.className = "btm-input"; nameIn.style.cssText = "flex:1;min-width:100px"; nameIn.value = p.label || k;
+            const nameIn = make("input", {}, ""); nameIn.type = "text"; nameIn.className = "btm-input"; nameIn.style.cssText = "flex:1;min-width:100px"; nameIn.value = k;
             const btnSave = make("button", {}, "√"); btnSave.className = "btm-btn btm-icon-btn green"; btnSave.innerHTML = ICON_OK;
             btnSave.addEventListener("click", async () => {
-                try { await api("/bsawang/tag/save_preset", { name: k, label: nameIn.value, guidance: guidIn.value, tags: p.tags || {} }); setStatus(`已存预设「${k}」`, true); await refreshDict(); }
-                catch (e) { setStatus("失败：" + e.message, false); }
+                try {
+                    const newName = (nameIn.value || "").trim();
+                    if (newName && newName !== k) {
+                        // 名称变更 → key+文件名一起改（key=name=文件名单一模型）
+                        await api("/bsawang/tag/rename_preset", { old_name: k, new_name: newName, guidance: guidIn.value, tags: p.tags || {} });
+                        setStatus(`已重命名「${k}」→「${newName}」`, true);
+                        presetTarget = { type: "edit", key: newName };
+                    } else {
+                        await api("/bsawang/tag/save_preset", { name: k, guidance: guidIn.value, tags: p.tags || {} });
+                        setStatus(`已存预设「${k}」`, true);
+                    }
+                    await refreshDict();
+                } catch (e) { setStatus("失败：" + e.message, false); }
             });
             const btnDel = makeIconBtn(ICON_DEL, "删除", async () => {
                 try { await api("/bsawang/tag/delete_preset", { name: k }); setStatus(`已删预设「${k}」`, true); presetTarget = { type: "edit", key: null }; await refreshDict(); }
@@ -562,7 +599,7 @@ function createLibraryPanel(node, nodeData) {
                         const newTags = JSON.parse(JSON.stringify(p.tags || {}));
                         (newTags[bk] || []).splice(newTags[bk].indexOf(t), 1);
                         if (!newTags[bk].length) delete newTags[bk];
-                        try { await api("/bsawang/tag/save_preset", { name: k, label: p.label, guidance: p.guidance, tags: newTags }); setStatus(`已移除「${bk}>${t}」`, true); await refreshDict(); }
+                        try { await api("/bsawang/tag/save_preset", { name: k, guidance: p.guidance, tags: newTags }); setStatus(`已移除「${bk}>${t}」`, true); await refreshDict(); }
                         catch (e) { setStatus("失败：" + e.message, false); }
                     });
                     tagsBox.appendChild(chip);
@@ -594,7 +631,7 @@ function createLibraryPanel(node, nodeData) {
                 chip.addEventListener("click", async () => {
                     const newTags = JSON.parse(JSON.stringify(p.tags || {}));
                     (newTags[curSub] = newTags[curSub] || []).push(t);
-                    try { await api("/bsawang/tag/save_preset", { name: k, label: p.label, guidance: p.guidance, tags: newTags }); setStatus(`已追加「${curSub}>${t}」`, true); await refreshDict(); }
+                    try { await api("/bsawang/tag/save_preset", { name: k, guidance: p.guidance, tags: newTags }); setStatus(`已追加「${curSub}>${t}」`, true); await refreshDict(); }
                     catch (e) { setStatus("失败：" + e.message, false); }
                 });
                 selBox.appendChild(chip);
@@ -703,6 +740,8 @@ app.registerExtension({
             const revNode = findUpstreamTagReverse(node);
             console.log("[bsawang] executed", nid, "| 节点", node?.type, "| 上游反推?", !!revNode);
             if (!revNode) return;
+            // token 用量：中间节点不触发 onExecuted，同样走全局 executed 回溯
+            if (typeof revNode._bsawangShowUsage === "function") revNode._bsawangShowUsage();
             const full = extractFullResult(detail?.output ?? detail?.executed);
             console.log("[bsawang] full?", !!full, full && Object.keys(full));
             if (full) revNode._bsawangApplyResult(full);
@@ -721,6 +760,7 @@ app.registerExtension({
                     if (typeof prevExec === "function") prevExec.apply(this, arguments);
                     const full = this._bsawangApplyResult && extractFullResult(message);
                     if (full) this._bsawangApplyResult(full);
+                    if (typeof this._bsawangShowUsage === "function") this._bsawangShowUsage();
                 };
                 return r;
             };
