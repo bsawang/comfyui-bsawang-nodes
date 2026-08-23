@@ -1,141 +1,51 @@
 # -*- coding: utf-8 -*-
-"""Tag 反推匹配节点：反推文字 → 结构化 tag 集合 + 扩展建议。
+"""Tag 反推匹配节点：图片/反推文字 → 结构化 tag 集合 + 扩展建议。
 
-反推文字 → LLM（templates/Tag反推结构化.txt）对照已加载 tag 池 →
-「已匹配 tag 集合」+「扩展建议」。双输出：tag集合JSON（matched，喂下游增强器/预设）
-+ 反推结果（完整 matched+suggestions，供面板直出渲染）。
-采纳/存预设由前端调 /bsawang/tag/* 路由写持久层。
+双匹配模式（widget「匹配模式」切换）：
+- 文字匹配：反推文字（或先图片反推）→ LLM 对照已加载 tag 池 → 匹配
+- 图片直匹配：图 + tag池 一次调用直接匹配（A/B 实验，比「图片理解 vs 文字理解」准确度）
+
+系统提示词按功能模块内部加载（templates/*.txt，见模块顶部常量），不向外暴露；
+自定义 = 直接改 templates/ 下对应 txt 文件。三输出：
+tag集合JSON（matched，喂下游增强器/预设）+ 反推结果（完整 matched+suggestions+引导词，供面板直出渲染）
++ 反推文字（多维描述全文）。
+采纳/存预设由前端调 /bsawang/tag/* 路由写持久层（tag_store.py）。
 中间节点，结果随工作流输出直出，后端不存反推状态。
+
+模块化拆分：通用能力（LLM/HTTP/图片/JSON）→ llm_utils.py；tag 数据 → tag_store.py；
+本文件只留 tag 匹配领域逻辑。
 """
 import json
-import os
-import urllib.error
-import urllib.request
 from pathlib import Path
 
-from . import llm_usage
-from .prompt_enhancer import _basket_options, _get_dict
+from . import llm_utils
+from . import tag_store
 
 NODE_DIR = Path(__file__).parent
 TEMPLATE_PATH = NODE_DIR / "templates" / "Tag反推结构化.txt"
+# 图片反推/图片直匹配模板：本地覆盖宽规则（llm_utils.pick_template，任意后缀变体优先），不依赖具体后缀字面
+IMG_REVERSE_TEMPLATE_PATH = llm_utils.pick_template(NODE_DIR / "templates", "图片多维分析")
+IMAGE_MATCH_TEMPLATE_PATH = llm_utils.pick_template(NODE_DIR / "templates", "图片直匹配")
+
+_ERROR_PREFIX = "[Tag反推] "
 
 
-def _read_system_prompt(path_str: str) -> str:
-    """读 system prompt 文件；路径为空回落默认模板；给了但读不到显式报错。"""
-    path_str = (path_str or "").strip()
-    if not path_str:
-        path_str = str(TEMPLATE_PATH)
-    try:
-        return Path(path_str).read_text(encoding="utf-8")
-    except Exception as e:
-        raise RuntimeError(f"[Tag反推] 系统提示词文件读取失败：{path_str}（{e}）")
-
-
-def _post_json(url, headers, payload):
-    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "ignore")
-        raise RuntimeError(f"[Tag反推] HTTP {e.code}：{body[:500]}")
-    except Exception as e:
-        raise RuntimeError(f"[Tag反推] 请求失败：{e}")
-
-
-def _call_llm(config, system, user_msg) -> str:
-    """LLM 调用（Anthropic 兼容 / OpenAI 兼容），返回纯文本 content。"""
-    interface = config.get("接口格式") or "Anthropic 兼容"
-    model = config.get("模型") or "deepseek-v4-flash"
-    base_url = (config.get("API基础URL") or "").strip().rstrip("/")
-    api_key_env = (config.get("APIKey环境变量") or "ANTHROPIC_AUTH_TOKEN").strip()
-    temperature = config.get("温度", 0.4)
-    max_tokens = int(config.get("最大token", 8192))
-    api_key = os.environ.get(api_key_env) or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-    if not api_key:
-        raise ValueError(f"[Tag反推] 未找到 API key：环境变量「{api_key_env}」为空。")
-
-    if interface.startswith("Anthropic"):
-        url = base_url + "/v1/messages" if not base_url.endswith("/v1/messages") else base_url
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system,
-            "thinking": {"type": "disabled"},
-            "messages": [{"role": "user", "content": user_msg}],
-            "temperature": temperature,
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        }
-        data = _post_json(url, headers, payload)
-        content = "".join(
-            c.get("text", "")
-            for c in data.get("content", [])
-            if isinstance(c, dict) and c.get("type") == "text"
-        )
-        usage = data.get("usage") or {}
-        llm_usage.record(usage.get("input_tokens"), usage.get("output_tokens"))
-    else:
-        url = base_url + "/chat/completions" if not base_url.endswith("/chat/completions") else base_url
-        payload = {
-            "model": model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-        data = _post_json(url, headers, payload)
-        try:
-            content = data["choices"][0]["message"].get("content") or ""
-        except (KeyError, IndexError, TypeError):
-            raise RuntimeError(f"[Tag反推] 响应结构异常：{json.dumps(data, ensure_ascii=False)[:500]}")
-        usage = data.get("usage") or {}
-        llm_usage.record(usage.get("prompt_tokens"), usage.get("completion_tokens"))
-
-    if not content.strip():
-        raise RuntimeError("[Tag反推] LLM 返回空内容。请检查模型/接口配置，或调大「最大token」。")
-    return content.strip()
-
-
-def _parse_json(content) -> dict:
-    """从 LLM 输出提取 JSON（容忍 markdown 代码围栏/前后缀）。"""
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.strip("`").strip()
-        if text.startswith("json"):
-            text = text[4:].strip()
-    s, e = text.find("{"), text.rfind("}")
-    if s < 0 or e < 0:
-        raise RuntimeError(f"[Tag反推] LLM 输出不含 JSON：{content[:300]}")
-    try:
-        return json.loads(text[s : e + 1])
-    except Exception:
-        raise RuntimeError(f"[Tag反推] JSON 解析失败：{text[s : e + 1][:300]}")
-
-
-def _run_match(config, text, sp_file):
-    """执行匹配：反推文字 → 结构化 matched + suggestions。返回 (matched, suggestions)。"""
+def _pool_block() -> str:
+    """全量 tag 池（dict.json + baskets/ 全部篮子 options），按篮子分组。"""
     pool_rows = []
-    for section in _get_dict()["sections"]:
+    for section in tag_store._get_dict()["sections"]:
         for f in section["fields"]:
             if f.get("type") == "basket":
                 pool_rows.append(f"{f['key']}：{'、'.join(f.get('options', []))}")
-    pool_block = "\n".join(pool_rows)
+    return "\n".join(pool_rows)
 
-    system = _read_system_prompt(sp_file)
-    user_msg = f"【反推文字】\n{text}\n\n【已加载tag】\n{pool_block}"
-    # 匹配是分类任务：强制低温（0.0）减少飘逸，结果更稳定
-    content = _call_llm(_stable_config(config, 0.0), system, user_msg)
-    parsed = _parse_json(content)
 
-    # 校验：matched 只保留池内存在的 tag；suggestions 的篮子必须在池内
+def _validate_parsed(parsed) -> tuple:
+    """校验解析结果：matched 只留池内存在的 tag；suggestions 的篮子必须在池内。返回 (matched, suggestions, 反推文字)。"""
+    text = (parsed.get("反推文字") or "").strip()
     valid_matched = {}
     for basket, tags in (parsed.get("matched") or {}).items():
-        opts = _basket_options(basket)
+        opts = tag_store._basket_options(basket)
         if opts is None:
             continue
         keep = [t for t in tags if t in opts]
@@ -147,18 +57,62 @@ def _run_match(config, text, sp_file):
             continue
         bk = (s.get("篮子") or "").strip()
         tag = (s.get("tag") or "").strip()
-        opts = _basket_options(bk)
+        opts = tag_store._basket_options(bk)
         # 建议必须是「库中不存在」的新 tag：库中已有的（如 跪趴撅臀/私处/ahegao）过滤掉
         if bk and tag and opts is not None and tag not in opts:
             clean_suggestions.append({"篮子": bk, "tag": tag, "reason": (s.get("reason") or "").strip()})
-    return valid_matched, clean_suggestions
+    return valid_matched, clean_suggestions, text
 
 
-def _stable_config(config, temp):
-    """复制配置并覆盖温度（匹配/归纳用低温，减少飘逸）。"""
-    c = dict(config)
-    c["温度"] = temp
-    return c
+def _run_match(config, text):
+    """文字匹配：反推文字 → 结构化 matched + suggestions。返回 (matched, suggestions, text)。"""
+    system = llm_utils.read_system_prompt(str(TEMPLATE_PATH), error_prefix=_ERROR_PREFIX)
+    user_msg = f"【反推文字】\n{text}\n\n【已加载tag】\n{_pool_block()}"
+    # 匹配是分类任务：强制低温（0.0）减少飘逸，结果更稳定
+    content, _ = llm_utils.call_llm(
+        llm_utils.stable_config(config, 0.0), system, user_msg, error_prefix=_ERROR_PREFIX
+    )
+    valid_matched, clean_suggestions, _ = _validate_parsed(
+        llm_utils.parse_json(content, error_prefix=_ERROR_PREFIX)
+    )
+    return valid_matched, clean_suggestions, text
+
+
+def _run_image_match(config, image):
+    """图片直匹配：图 + tag池 一次调用 → matched + suggestions + 反推文字。返回 (matched, suggestions, text)。"""
+    if not config.get("支持视觉", False):
+        raise ValueError(
+            f"{_ERROR_PREFIX}图片直匹配需要多模态模型：请在「LLM API 设定器」里选视觉模型"
+            "（如 deepseek-v4-flash-vision-exp）并把「支持视觉」设为「是」。"
+        )
+    image_b64 = llm_utils.image_to_base64(image)
+    system = llm_utils.read_system_prompt(str(IMAGE_MATCH_TEMPLATE_PATH), error_prefix=_ERROR_PREFIX)
+    user_msg = f"【已加载tag】\n{_pool_block()}\n\n请分析图片并对照 tag 池，只输出严格 JSON。"
+    content, _ = llm_utils.call_llm(
+        llm_utils.stable_config(config, 0.0), system, user_msg,
+        image_b64=image_b64, error_prefix=_ERROR_PREFIX,
+    )
+    valid_matched, clean_suggestions, text = _validate_parsed(
+        llm_utils.parse_json(content, error_prefix=_ERROR_PREFIX)
+    )
+    return valid_matched, clean_suggestions, text
+
+
+def _reverse_image(config, image):
+    """图片反推：多模态 LLM 按多维分析模板把图片转成结构化描述文本（反推文字）。"""
+    if not config.get("支持视觉", False):
+        raise ValueError(
+            f"{_ERROR_PREFIX}图片反推需要多模态模型：请在「LLM API 设定器」里选视觉模型"
+            "（如 deepseek-v4-flash-vision-exp）并把「支持视觉」设为「是」。"
+        )
+    image_b64 = llm_utils.image_to_base64(image)
+    system = llm_utils.read_system_prompt(str(IMG_REVERSE_TEMPLATE_PATH), error_prefix=_ERROR_PREFIX)
+    user_msg = "请按系统提示词要求，完整、结构化地分析这张图片。"
+    content, _ = llm_utils.call_llm(
+        llm_utils.stable_config(config, 0.2), system, user_msg,
+        image_b64=image_b64, error_prefix=_ERROR_PREFIX,
+    )
+    return content.strip()
 
 
 def _generate_guidance(config, text):
@@ -169,7 +123,9 @@ def _generate_guidance(config, text):
         "不要任何前缀、解释、markdown 或引号包裹。"
     )
     user_msg = f"【场景描述】\n{text}"
-    content = _call_llm(_stable_config(config, 0.2), system, user_msg)
+    content, _ = llm_utils.call_llm(
+        llm_utils.stable_config(config, 0.2), system, user_msg, error_prefix=_ERROR_PREFIX
+    )
     return content.strip().strip('"').strip("'")
 
 
@@ -177,26 +133,30 @@ class Tag_Reverse:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {
+            "required": {},
+            "optional": {
                 "反推文字": (
                     "STRING",
                     {
                         "multiline": True,
                         "default": "",
-                        "placeholder": "VL 反推输出 / 多维描述（如 AILab_QwenVL 反推结果）",
+                        "placeholder": "VL 反推输出 / 多维描述（如 AILab_QwenVL 反推结果）；接「图片」时此项可空",
                     },
                 ),
-            },
-            "optional": {
-                "LLM": ("LLM_CONFIG", {}),
-                # 系统提示词文件：原生 widget，面板创建后重排到最底部
-                "系统提示词文件": (
-                    "STRING",
+                "图片": (
+                    "IMAGE",
+                    {"tooltip": "可选：接图时用多模态 LLM 直接反推（需 LLM 设定器「支持视觉=是」），生成反推文字后走匹配；与「反推文字」二选一"},
+                ),
+                "匹配模式": (
+                    ["文字匹配", "图片直匹配"],
                     {
-                        "default": str(TEMPLATE_PATH),
-                        "tooltip": "反推匹配 system prompt（结构化 JSON 模板），改 txt 即生效",
+                        "default": "文字匹配",
+                        "tooltip": "文字匹配=反推文字/图片反推后按文字匹配（现状）；图片直匹配=图+tag池一次调用直接匹配（A/B 实验，比「图片理解 vs 文字理解」的匹配准确度）",
                     },
                 ),
+                "LLM": ("LLM_CONFIG", {}),
+                # 系统提示词按功能模块内部加载（templates/*.txt，见模块顶部常量），不向外暴露；
+                # 自定义 = 直接改 templates/ 下对应 txt 文件（改 txt 即生效）
                 # 当前 tag 集合（matched，随工作流序列化；面板写，反推结果覆盖）
                 "bsawang_tag_state": (
                     "STRING",
@@ -205,19 +165,31 @@ class Tag_Reverse:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("tag集合JSON", "反推结果")
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("tag集合JSON", "反推结果", "反推文字")
     FUNCTION = "process"
     CATEGORY = "bsawang/提示词增强器"
 
-    def process(self, 反推文字, 系统提示词文件, LLM=None, **kw):
+    def process(self, 反推文字, LLM=None, 图片=None, 匹配模式="文字匹配", **kw):
         if not isinstance(LLM, dict) or not LLM.get("模型"):
-            raise ValueError("[Tag反推] 需要接「LLM API 设定器」的输出。")
-        text = (反推文字 or "").strip()
-        if not text:
-            raise ValueError("[Tag反推] 反推文字为空。")
+            raise ValueError(f"{_ERROR_PREFIX}需要接「LLM API 设定器」的输出。")
 
-        valid_matched, clean_suggestions = _run_match(LLM, text, 系统提示词文件)
+        if 匹配模式 == "图片直匹配":
+            # A/B 实验臂：图 + tag池 一次调用直接匹配（匹配阶段真看图）
+            if 图片 is None:
+                raise ValueError(f"{_ERROR_PREFIX}图片直匹配模式需要接「图片」输入。")
+            valid_matched, clean_suggestions, text = _run_image_match(LLM, 图片)
+        else:
+            # 图片反推优先：有图 → 多模态 LLM 直接反推；无图 → 用反推文字输入
+            if 图片 is not None:
+                text = _reverse_image(LLM, 图片)
+            else:
+                text = (反推文字 or "").strip()
+            if not text:
+                raise ValueError(f"{_ERROR_PREFIX}反推文字为空：请填「反推文字」或接「图片」输入。")
+            valid_matched, clean_suggestions, _ = _run_match(LLM, text)
+
+        # 两模式都归纳引导词（基于反推文字）
         try:
             guidance = _generate_guidance(LLM, text)
         except Exception:
@@ -226,6 +198,7 @@ class Tag_Reverse:
         return (
             json.dumps(valid_matched, ensure_ascii=False),
             json.dumps(full, ensure_ascii=False),
+            text,
         )
 
 

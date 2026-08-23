@@ -31,9 +31,7 @@
 | 文件 | 任务 | 对应节点 |
 |---|---|---|
 | `templates/常规文生图.txt` | 提示词增强通用基座（文生图/图生图/文生视频/图生视频） | Prompt_Enhancer 默认 |
-| `templates/H3视频提示词格式化.txt`（`.nsfw` 变体） | H3 视频提示词格式化（六段式） | H3_API_PromptFormatter 默认 |
-
-> NSFW 后缀机制保留：`.nsfw` 变体文件按原约定命名，`.gitignore` 的 `*nsfw*` 忽略不变，本地保留、不上远程。
+| `templates/H3视频提示词格式化.txt` | H3 视频提示词格式化（六段式） | H3_API_PromptFormatter 默认 |
 > 已弃用：`Krea2Edit场景融合` 为老方案（VL 反推 → LLM 融合），现已优化为 LLM 前置（Prompt_Enhancer 直接承接），不再收录。
 
 ## 节点 1：H3 API 提示词格式化

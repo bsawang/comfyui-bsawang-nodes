@@ -24,13 +24,13 @@ from .tag_library import (
 NODE_CLASS_MAPPINGS = {**H3_MAPPINGS, **CONFIG_MAPPINGS, **ENHANCER_MAPPINGS, **REV_MAPPINGS, **LIB_MAPPINGS}
 NODE_DISPLAY_NAME_MAPPINGS = {**H3_DISPLAY, **CONFIG_DISPLAY, **ENHANCER_DISPLAY, **REV_DISPLAY, **LIB_DISPLAY}
 
-# 注册 API 路由：LLM token 统计 + 增强器字典刷新（前端「刷新字典」按钮）
+# 注册 API 路由：LLM token 统计 + tag 库（/bsawang/tag/* 与增强器字典刷新）
 try:
     from . import llm_usage
-    from . import prompt_enhancer as _enhancer
+    from . import tag_store
     from server import PromptServer
     llm_usage.setup_routes(PromptServer.instance)
-    _enhancer.setup_routes(PromptServer.instance)
+    tag_store.setup_routes(PromptServer.instance)
 except Exception:
     pass
 

@@ -12,7 +12,7 @@
 |---|---|
 | 预设目录 | `presets/`（节点包根目录，与 `baskets/`、`dict.json` 同级）|
 | 文件粒度 | 一个预设一个 JSON 文件 |
-| 文件命名 | `{key}.json`；NSFW 变体 `{key}.nsfw.json`（`.gitignore` `*nsfw*` 忽略，本地保留不上远程）|
+| 文件命名 | `{key}.json` |
 | 部署目录 | 运行副本 `custom_nodes/ComfyUI-bsawang/presets/`（与仓库同步）|
 
 ## 2. 文件格式
@@ -47,7 +47,7 @@
 - `tags` 的篮子 key 必须存在于 `dict.json + baskets/` 合并后的字典（不存在 → 应用时跳过并提示）
 - `tags` 的 tag 值**不必**已存在于篮子 options——应用预设只填篮子状态；增强器运行时把选中的 tag 传给 LLM
 - 应用语义 = **覆盖所涉篮子**（替换该篮子当前选择），未涉及的篮子不动；应用后可自由微调
-- `key` 全局唯一；NSFW 变体 `key` 不得与通用版重复
+- `key` 全局唯一
 - 新增预设走 `save_preset` 的 `create: true`，`name` 已存在则报错（重复检测）；重命名走 `rename_preset`（改 key + 文件名）
 
 ## 4. 制作流程
@@ -62,7 +62,7 @@
 - [ ] `key` 全局唯一、不含 `/ \` 非法字符
 - [ ] `tags` 的篮子 key 都在当前字典内
 - [ ] `tags` 非空
-- [ ] NSFW 变体命名 `{key}.nsfw.json` 且 key 不冲突
+- [ ] `key` 不冲突
 
 ## 6. 消费方
 

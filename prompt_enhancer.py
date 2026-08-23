@@ -1,56 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-提示词增强器节点
+提示词增强器节点（瘦身版）
 
 接收 LLM 连接（LLM_API_Configurator 输出的 LLM_CONFIG）+ 用户提示词，
 按四栏设置（类型选择 / 类型基础信息 / 内容设置 / 输出设置）增强为完整提示词。
 
-核心机制：
-  - 外部字典 dict.json 定义所有下拉（tag 字典），源码动态加载渲染；
-    加分类/加值 = 改 dict.json，不改代码（「UI 只做拼接器」原则）。
-  - 字典选出的值（tag）是给 LLM 的建议；用户定制走 text（第一栏），LLM 自由发挥组织输出。
-  - 输出格式：自然语言 / Tag / 混合，规则外置 txt「按输出格式组织」段。
-
-HTTP 调用复用 H3 节点方案：urllib 无第三方依赖；Anthropic 兼容 /v1/messages + thinking disabled
-（DeepSeek 兼容接口可过、token 全给正文）；OpenAI 兼容 /chat/completions（GLM/Gemini 用）。
+模块化拆分：
+  - 通用能力（LLM 调用 / HTTP / 图片 base64 / 模板读取 / 文本清理）→ llm_utils.py
+  - tag 数据（dict/baskets/presets 持久层 + 路由）→ tag_store.py
+  - 本文件只留增强节点自身的逻辑（任务模板 / 负面词库 / widget 构建 / 增强流程）。
 """
 import json
-import os
-import urllib.error
-import urllib.request
 from pathlib import Path
 
-from . import llm_usage
+from . import llm_utils
+from . import tag_store
 
 NODE_DIR = Path(__file__).parent
-DICT_PATH = NODE_DIR / "dict.json"
-BASKETS_DIR = NODE_DIR / "baskets"
-PRESETS_DIR = NODE_DIR / "presets"
-TASKS_PATH = NODE_DIR / "tasks.json"
-
-# tag 库版本号：任何篮子/预设写入时递增；并用 WebSocket 推送「库变了」事件（前端通知机制，非轮询）
-TAG_LIB_VERSION = 0
-
-
-def _bump_lib_version():
-    global TAG_LIB_VERSION
-    TAG_LIB_VERSION += 1
-    try:
-        from server import PromptServer
-        PromptServer.instance.send_sync("bsawang/tag_lib_changed", {"version": TAG_LIB_VERSION})
-    except Exception:
-        pass
-
 
 
 def _load_tasks() -> dict:
     """读取任务类型模板 tasks.json：每任务类型的专属/隐藏控件 + 增强要点。"""
+    tasks_path = NODE_DIR / "tasks.json"
     try:
-        data = json.loads(TASKS_PATH.read_text(encoding="utf-8"))
+        data = json.loads(tasks_path.read_text(encoding="utf-8"))
     except Exception as e:
-        raise RuntimeError(f"[提示词增强器] 任务模板文件读取失败：{TASKS_PATH}（{e}）")
+        raise RuntimeError(f"[提示词增强器] 任务模板文件读取失败：{tasks_path}（{e}）")
     if not isinstance(data, dict) or not data:
-        raise RuntimeError(f"[提示词增强器] 任务模板为空或结构缺失：{TASKS_PATH}")
+        raise RuntimeError(f"[提示词增强器] 任务模板为空或结构缺失：{tasks_path}")
     return data
 
 
@@ -62,347 +39,6 @@ DEFAULT_NEGATIVE = [
     "畸形", "多余手指", "多余肢体", "错误解剖", "残肢", "扭曲", "姿势不自然",
     "血腥", "血迹", "暴力", "恐怖", "惊悚", "未成年", "儿童",
 ]
-
-
-def _load_dict() -> dict:
-    """读取外部字典 dict.json，并合并 baskets/ 目录下所有篮子文件（一个篮子一个文件）。
-    缺失/损坏时显式报错（透传 UI），不静默回落。"""
-    try:
-        data = json.loads(DICT_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise RuntimeError(f"[提示词增强器] 字典文件读取失败：{DICT_PATH}（{e}）")
-    if not data or not data.get("sections"):
-        raise RuntimeError(f"[提示词增强器] 字典文件为空或结构缺失：{DICT_PATH}")
-    _merge_baskets(data)
-    return data
-
-
-def _merge_baskets(data: dict) -> None:
-    """把 baskets/*.json（一个篮子一个文件）合并进 data['sections']。
-
-    按 section.id 定位段（不存在自动新建），fields 按 key 去重追加，再按 order 排序。
-    本地存在的篮子文件才会被合并——增删篮子 = 增删文件。
-    """
-    sec_index = {s["id"]: i for i, s in enumerate(data["sections"])}
-    for fp in sorted(BASKETS_DIR.glob("*.json")):
-        try:
-            f = json.loads(fp.read_text(encoding="utf-8"))
-        except Exception as e:
-            raise RuntimeError(f"[提示词增强器] 篮子文件读取失败：{fp}（{e}）")
-        if not isinstance(f, dict):
-            raise RuntimeError(f"[提示词增强器] 篮子文件不是 JSON 对象：{fp}")
-        key = f.get("key")
-        section_id = f.get("section")
-        if not key or not section_id:
-            raise RuntimeError(f"[提示词增强器] 篮子文件缺少 key/section：{fp}")
-
-        # 定位或自动新建 section
-        if section_id not in sec_index:
-            data["sections"].append({
-                "id": section_id,
-                "title": f.get("section_title") or section_id,
-                "fields": [],
-            })
-            sec_index[section_id] = len(data["sections"]) - 1
-        sec = data["sections"][sec_index[section_id]]
-
-        # section_title 一致性校验（提供了且与现有不同则报错）
-        st = f.get("section_title")
-        if st and sec.get("title") and sec["title"] != st and sec["title"] != section_id:
-            raise RuntimeError(
-                f"[提示词增强器] section「{section_id}」标题不一致：{sec['title']} vs {st}（{fp}）"
-            )
-        if st and not sec.get("title"):
-            sec["title"] = st
-
-        # fields 按 key 去重
-        fields = sec.setdefault("fields", [])
-        for existing in fields:
-            if existing.get("key") == key:
-                raise RuntimeError(f"[提示词增强器] 篮子 key 冲突：{key}（{fp}）")
-
-        # 去掉 loader 元数据字段，其余进字段定义
-        field = {k: v for k, v in f.items() if k not in ("section", "section_title")}
-        field.setdefault("type", "basket")
-        field.setdefault("default", "")
-        fields.append(field)
-
-    # 同 section 内：基座字段（无 order）保持 dict.json 原顺序在前，篮子字段按 order 排序追加在后
-    for sec in data["sections"]:
-        base = [f for f in sec["fields"] if "order" not in f]
-        baskets = sorted(
-            (f for f in sec["fields"] if "order" in f),
-            key=lambda f: (f.get("order", 0), f.get("key", "")),
-        )
-        sec["fields"] = base + baskets
-
-
-# 字典 mtime 缓存：dict.json + baskets/*.json 变化时自动重读（配合前端「刷新字典」按钮，无需重启）
-_DICT_CACHE = {"stamp": None, "data": None}
-
-
-def _dict_stamp():
-    """返回 dict.json + baskets/*.json 的 (路径, mtime) 指纹，用于判断文件是否变化。"""
-    stamps = [(str(DICT_PATH), DICT_PATH.stat().st_mtime)]
-    for fp in sorted(BASKETS_DIR.glob("*.json")):
-        stamps.append((str(fp), fp.stat().st_mtime))
-    return tuple(stamps)
-
-
-def _get_dict() -> dict:
-    """读取字典（mtime 缓存）：文件没变返回缓存，变了才重新加载。"""
-    try:
-        stamp = _dict_stamp()
-    except OSError:
-        stamp = None
-    if _DICT_CACHE["data"] is None or _DICT_CACHE["stamp"] != stamp:
-        _DICT_CACHE["data"] = _load_dict()
-        _DICT_CACHE["stamp"] = stamp
-    return _DICT_CACHE["data"]
-
-
-def _tasks_from_condition(condition):
-    """从篮子 condition 推导适用任务类型（前端 tab 显隐 + 刷新接口共用）；无 condition = 全部任务。"""
-    if not condition or not isinstance(condition, dict):
-        return []
-    return condition.get("任务类型", [])
-
-
-DICT = _get_dict()
-
-
-# ---------- 预设（presets/*.json） ----------
-
-_PRESET_CACHE = {"stamp": None, "data": None}
-
-
-def _presets_stamp():
-    if not PRESETS_DIR.is_dir():
-        return None
-    stamps = []
-    for p in sorted(PRESETS_DIR.glob("*.json")):
-        stamps.append((p.name, p.stat().st_mtime_ns))
-    return tuple(stamps)
-
-
-def _load_presets() -> dict:
-    """读取 presets/ 目录全部预设（mtime 缓存）：{key: {key,guidance,tags}}。"""
-    try:
-        stamp = _presets_stamp()
-    except OSError:
-        stamp = None
-    if _PRESET_CACHE["data"] is None or _PRESET_CACHE["stamp"] != stamp:
-        presets = {}
-        if PRESETS_DIR.is_dir():
-            for p in sorted(PRESETS_DIR.glob("*.json")):
-                try:
-                    d = json.loads(p.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                key = (d.get("key") or "").strip() or p.stem
-                presets[key] = {
-                    "key": key,
-                    "guidance": d.get("guidance", ""),
-                    "tags": d.get("tags", {}) or {},
-                }
-        _PRESET_CACHE["data"] = presets
-        _PRESET_CACHE["stamp"] = stamp
-    return _PRESET_CACHE["data"]
-
-
-def _save_preset(name, tags, guidance="", create_only=False):
-    """创建或更新预设。create_only=True 且已存在 → 报错（新增去重）；写 presets/{name}.json。返回安全 key。"""
-    name = (name or "").strip().replace("/", "_").replace("\\", "_")
-    if not name:
-        raise ValueError("[Tag] 预设名不能为空")
-    path = PRESETS_DIR / f"{name}.json"
-    if path.exists() and create_only:
-        raise ValueError(f"[Tag] 预设「{name}」已存在，请勿重复新增")
-    # 自检：篮子 key 存在 + 组合约束（互斥/冲突/跨字段 gate）——坏预设任何入口都存不进去
-    for bk in (tags or {}):
-        if _basket_options(bk) is None:
-            raise ValueError(f"[Tag] 预设的篮子「{bk}」不存在当前字典，请检查篮子 key")
-    errs = _collect_basket_errors(tags or {})
-    if errs:
-        raise ValueError("[Tag] 预设组合自检失败：\n" + "\n".join("  - " + e for e in errs))
-    data = {
-        "key": name,
-        "guidance": guidance or "",
-        "tags": tags or {},
-    }
-    PRESETS_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    _PRESET_CACHE["data"] = None
-    _bump_lib_version()
-    return name
-
-
-def _delete_preset(name):
-    name = (name or "").strip().replace("/", "_").replace("\\", "_")
-    path = PRESETS_DIR / f"{name}.json"
-    if path.exists():
-        path.unlink()
-    _PRESET_CACHE["data"] = None
-    _bump_lib_version()
-    return True
-
-
-def _rename_preset(old_name, new_name, tags, guidance=""):
-    """重命名预设：key+文件名一起改（key=name=文件名单一模型）。"""
-    old_name = (old_name or "").strip().replace("/", "_").replace("\\", "_")
-    new_name = (new_name or "").strip().replace("/", "_").replace("\\", "_")
-    if not old_name or not new_name:
-        raise ValueError("[Tag] 预设名不能为空")
-    if old_name == new_name:
-        raise ValueError("[Tag] 新旧预设名相同，无需重命名")
-    old_path = PRESETS_DIR / f"{old_name}.json"
-    if not old_path.exists():
-        raise ValueError(f"[Tag] 预设文件不存在：{old_name}")
-    new_path = PRESETS_DIR / f"{new_name}.json"
-    if new_path.exists():
-        raise ValueError(f"[Tag] 预设「{new_name}」已存在，无法重命名")
-    data = {"key": new_name, "guidance": guidance or "", "tags": tags or {}}
-    new_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    old_path.unlink()
-    _PRESET_CACHE["data"] = None
-    _bump_lib_version()
-    return new_name
-
-
-def _read_basket_file(basket):
-    """读 baskets/{basket}.json 原始文件（key 已与文件名一致）；不存在报错。"""
-    path = BASKETS_DIR / f"{basket}.json"
-    if not path.exists():
-        raise ValueError(f"[Tag] 篮子文件不存在：{path}")
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_basket_file(basket, data):
-    """写回 baskets/{basket}.json + 失效字典缓存 + 递增库版本。"""
-    (BASKETS_DIR / f"{basket}.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    _DICT_CACHE["data"] = None
-    _bump_lib_version()
-
-
-def _save_basket(key, guidance=None, create_only=False):
-    """创建或更新篮子 meta。create_only=True 且 key 已存在 → 报错（新增去重）；不存在 → 新建（content section，空 options）。"""
-    key = (key or "").strip()
-    if not key:
-        raise ValueError("[Tag] 篮子 key 不能为空")
-    path = BASKETS_DIR / f"{key}.json"
-    if path.exists():
-        if create_only:
-            raise ValueError(f"[Tag] 篮子「{key}」已存在，请勿重复新增")
-        bf = json.loads(path.read_text(encoding="utf-8"))
-    else:
-        bf = {
-            "key": key, "section": "content", "type": "basket",
-            "options": [], "guidance": [], "option_guidance": {},
-        }
-    if guidance is not None:
-        g = (guidance or "").strip()
-        bf["guidance"] = [g] if g else []
-    _write_basket_file(key, bf)
-    return key
-
-
-def _rename_basket(old_key, new_key, guidance=None):
-    """重命名篮子：key+文件名一起改（key=label 单一模型），并迁移预设引用。"""
-    old_key = (old_key or "").strip()
-    new_key = (new_key or "").strip()
-    if not old_key or not new_key:
-        raise ValueError("[Tag] 篮子 key 不能为空")
-    if old_key == new_key:
-        raise ValueError("[Tag] 新旧 key 相同，无需重命名")
-    old_path = BASKETS_DIR / f"{old_key}.json"
-    if not old_path.exists():
-        raise ValueError(f"[Tag] 篮子文件不存在：{old_key}")
-    new_path = BASKETS_DIR / f"{new_key}.json"
-    if new_path.exists():
-        raise ValueError(f"[Tag] 篮子「{new_key}」已存在，无法重命名")
-    bf = json.loads(old_path.read_text(encoding="utf-8"))
-    bf["key"] = new_key
-    if guidance is not None:
-        g = (guidance or "").strip()
-        bf["guidance"] = [g] if g else []
-    new_path.write_text(json.dumps(bf, ensure_ascii=False, indent=2), encoding="utf-8")
-    old_path.unlink()
-    # 迁移预设引用：presets/*.json 的 tags 里旧 key → 新 key
-    if PRESETS_DIR.is_dir():
-        for p in sorted(PRESETS_DIR.glob("*.json")):
-            try:
-                pf = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            tags = pf.get("tags") or {}
-            if old_key in tags:
-                tags[new_key] = tags.pop(old_key)
-                p.write_text(json.dumps(pf, ensure_ascii=False, indent=2), encoding="utf-8")
-    _DICT_CACHE["data"] = None
-    _bump_lib_version()
-    return new_key
-
-
-def _delete_basket(key):
-    """删 baskets/{key}.json。"""
-    key = (key or "").strip()
-    path = BASKETS_DIR / f"{key}.json"
-    if path.exists():
-        path.unlink()
-    _DICT_CACHE["data"] = None
-    _bump_lib_version()
-    return True
-
-
-def _save_option(basket, tag, guidance=None):
-    """在篮子 options 加/改一个 tag；guidance 写入 option_guidance[tag]（空则移除）。"""
-    basket = (basket or "").strip()
-    tag = (tag or "").strip()
-    if not basket or not tag:
-        raise ValueError("[Tag] 篮子/tag 不能为空")
-    bf = _read_basket_file(basket)
-    opts = bf.get("options", [])
-    if tag not in opts:
-        opts.append(tag)
-        bf["options"] = opts
-    og = bf.setdefault("option_guidance", {})
-    g = (guidance or "").strip()
-    if g:
-        og[tag] = g
-    else:
-        og.pop(tag, None)
-    _write_basket_file(basket, bf)
-    return True
-
-
-def _delete_option(basket, tag):
-    """从篮子 options 移除 tag + 对应 option_guidance。"""
-    basket = (basket or "").strip()
-    tag = (tag or "").strip()
-    if not basket:
-        raise ValueError("[Tag] 篮子不能为空")
-    bf = _read_basket_file(basket)
-    bf["options"] = [o for o in bf.get("options", []) if o != tag]
-    bf.get("option_guidance", {}).pop(tag, None)
-    _write_basket_file(basket, bf)
-    return True
-
-
-def _add_basket_option(basket, tag):
-    """往篮子 options 加 tag（去重）；basket 必须是已加载篮子（Tag_Reverse 采纳用）。"""
-    _save_option(basket, tag)
-    return True
-
-
-def _basket_options(basket):
-    """取某篮子已加载 options；不存在返回 None。"""
-    for section in _get_dict()["sections"]:
-        for f in section["fields"]:
-            if f.get("type") == "basket" and f.get("key") == basket:
-                return f.get("options", [])
-    return None
 
 
 def _load_default_system_prompt() -> str:
@@ -419,17 +55,8 @@ SYSTEM_PROMPT = _load_default_system_prompt()
 
 
 def _read_system_prompt(path_str: str) -> str:
-    path_str = (path_str or "").strip()
-    if not path_str:
-        return SYSTEM_PROMPT
-    try:
-        with open(path_str, encoding="utf-8") as f:
-            content = f.read().strip()
-    except Exception as e:
-        raise RuntimeError(f"[提示词增强器] 系统提示词文件读取失败：{path_str}（{e}）")
-    if not content:
-        raise RuntimeError(f"[提示词增强器] 系统提示词文件为空：{path_str}")
-    return content
+    """读系统提示词文件：路径为空回落内置默认；给路径读不到显式报错。"""
+    return llm_utils.read_system_prompt(path_str, default=SYSTEM_PROMPT, error_prefix="[提示词增强器] ")
 
 
 def _split_basket(value):
@@ -437,102 +64,14 @@ def _split_basket(value):
     return [t.strip() for t in str(value or "").split(",") if t.strip() and t.strip() != "未设置"]
 
 
-def _collect_basket_errors(tags_by_field: dict) -> list:
-    """收集内容层组合自检错误（互斥/冲突/跨字段矛盾）；无错返回空列表。
-
-    tags_by_field: {字段key: [已选tag列表]}
-    """
-    errors = []
-    for key, tags in tags_by_field.items():
-        if not tags:
-            continue
-        # 1. 整栏互斥：一次只能选 1 个
-        fld_mutex = None
-        fld_conflicts = []
-        for section in _get_dict()["sections"]:
-            for fld in section["fields"]:
-                if fld["key"] == key:
-                    fld_mutex = fld.get("mutually_exclusive")
-                    fld_conflicts = fld.get("conflicts", [])
-                    break
-        if fld_mutex and len(tags) > 1:
-            errors.append(f"[{key}] 互斥：一次只能选一个，当前选了 {len(tags)} 个：{'、'.join(tags)}")
-        # 2. 特定冲突对：同一栏内两个冲突 tag 同时出现
-        for pair in fld_conflicts:
-            if pair[0] in tags and pair[1] in tags:
-                errors.append(f"[{key}] 冲突：『{pair[0]}』与『{pair[1]}』不能同时选")
-    # 3. 跨字段矛盾：被 gate 的字段有值但 gate 字段未选（gate 关系由篮子文件定义）
-    gate_map = {}
-    for section in _get_dict()["sections"]:
-        for f in section["fields"]:
-            g = f.get("gate")
-            if g:
-                gate_map.setdefault(g, []).append(f["key"])
-    for gate_key, gated_keys in gate_map.items():
-        if not tags_by_field.get(gate_key):
-            for k in gated_keys:
-                if tags_by_field.get(k):
-                    errors.append(
-                        f"[跨字段] 矛盾：{gate_key} 未选，但「{k}」仍有选择（{'、'.join(tags_by_field[k])}），请先选 {gate_key} 或清空「{k}」"
-                    )
-    return errors
-
-
 def _validate_basket(tags_by_field: dict):
     """自检：校验内容层组合合理性。检测互斥/冲突/跨字段矛盾，发现即 raise（报错拦截，不改数据）。
 
     tags_by_field: {字段key: [已选tag列表]}
     """
-    errors = _collect_basket_errors(tags_by_field)
+    errors = tag_store._collect_basket_errors(tags_by_field)
     if errors:
         raise ValueError("[提示词增强器] 内容组合自检失败：\n" + "\n".join("  - " + e for e in errors))
-
-
-def _image_to_base64(image) -> str:
-    """把 ComfyUI IMAGE tensor 转成 base64 JPEG（data URI）。"""
-    import base64
-    import io
-
-    from PIL import Image
-
-    img = image[0]  # 取第一帧
-    arr = img.detach().cpu().numpy()
-    if arr.shape[-1] == 4:  # RGBA → RGB
-        arr = arr[..., :3]
-    arr = (arr * 255).clip(0, 255).astype("uint8")
-    pil = Image.fromarray(arr)
-    buf = io.BytesIO()
-    pil.save(buf, format="JPEG", quality=90)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-
-
-def _strip_code_fences(content: str) -> str:
-    if content.startswith("```"):
-        content = content.split("\n", 1)[-1] if "\n" in content else ""
-        if content.endswith("```"):
-            content = content[:-3].rstrip()
-    return content.strip()
-
-
-def _collapse_blank_lines(text: str) -> str:
-    """把连续 2+ 空行压缩成 1 个空行（保留分段标题间的单个空行，去掉多余空行）。"""
-    lines = text.split("\n")
-    result = []
-    prev_blank = False
-    for line in lines:
-        if line.strip() == "":
-            if not prev_blank:
-                result.append("")
-            prev_blank = True
-        else:
-            result.append(line)
-            prev_blank = False
-    # 去掉首尾空行
-    while result and result[0].strip() == "":
-        result.pop(0)
-    while result and result[-1].strip() == "":
-        result.pop()
-    return "\n".join(result)
 
 
 def _build_widget(field: dict):
@@ -613,7 +152,7 @@ class Prompt_Enhancer:
         # basket 字段不生成原生 widget（前端 splice，避免占空间），meta 打进 bsawang.basketMeta 供前端渲染
         # meta.tasks = 篮子 condition 推导的适用任务类型列表（无 condition = 全部任务），前端据此显隐 tab
         basket_meta = {}
-        for section in _get_dict()["sections"]:
+        for section in tag_store._get_dict()["sections"]:
             for field in section["fields"]:
                 if field.get("type") == "basket":
                     basket_meta[field["key"]] = {
@@ -621,7 +160,7 @@ class Prompt_Enhancer:
                         "mutually_exclusive": field.get("mutually_exclusive", False),
                         "conflicts": field.get("conflicts", []),
                         "condition": field.get("condition"),
-                        "tasks": _tasks_from_condition(field.get("condition")),
+                        "tasks": tag_store._tasks_from_condition(field.get("condition")),
                     }
                     continue
                 required[field["key"]] = _build_widget(field)
@@ -660,32 +199,17 @@ class Prompt_Enhancer:
         # 从 LLM_CONFIG 取连接配置
         if not isinstance(LLM, dict) or not LLM.get("模型"):
             raise ValueError("[提示词增强器] LLM 连接无效：请接「LLM API 设定器」的输出。")
-        接口格式 = LLM.get("接口格式", "Anthropic 兼容")
-        模型 = LLM["模型"]
-        API基础URL = LLM.get("API基础URL", "")
-        APIKey环境变量 = LLM.get("APIKey环境变量", "ANTHROPIC_AUTH_TOKEN")
-        温度 = LLM.get("温度", 0.4)
-        最大token = LLM.get("最大token", 8192)
         支持视觉 = LLM.get("支持视觉", False)
 
         # 参考图 → base64（仅 LLM 支持视觉时；否则降级纯文本）
         参考图b64 = None
         if 参考图 is not None:
-            if not 支持视觉:
-                # 不报错，降级：LLM 看不到图，靠 text 描述
-                pass
-            else:
+            if 支持视觉:
                 try:
-                    参考图b64 = _image_to_base64(参考图)
+                    参考图b64 = llm_utils.image_to_base64(参考图)
                 except Exception as e:
                     raise ValueError(f"[提示词增强器] 参考图转 base64 失败：{e}")
-
-        api_key = os.environ.get(APIKey环境变量) or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-        if not api_key:
-            raise ValueError(
-                f"[提示词增强器] 未找到 API key：环境变量「{APIKey环境变量}」为空，"
-                "回退 ANTHROPIC_AUTH_TOKEN 也为空。请在 LLM 设定器里修正环境变量名。"
-            )
+            # 不支持视觉：不报错，降级——LLM 看不到图，靠 text 描述
 
         system_prompt = _read_system_prompt(系统提示词文件)
 
@@ -711,7 +235,7 @@ class Prompt_Enhancer:
         # 按选中篮子注入 guidance / option_guidance（篮子文件定义的系统提示词补充，去重；维度规则本地注入）
         injected = []
         _seen = set()
-        for _section in _get_dict()["sections"]:
+        for _section in tag_store._get_dict()["sections"]:
             for _f in _section["fields"]:
                 if _f.get("type") == "basket" and basket_tags.get(_f["key"]):
                     for _g in (_f.get("guidance") or []):
@@ -733,7 +257,7 @@ class Prompt_Enhancer:
         # basket 字段值 = 逗号分隔的已选 tag（可能含用户手动补充的），拆成列表；空篮子不传。
         # combo 字段单值；未设置不传，LLM 自动补全。
         tag_lines = []
-        for section in _get_dict()["sections"]:
+        for section in tag_store._get_dict()["sections"]:
             if section["id"] == "output":
                 continue  # 输出设置单独处理
             for field in section["fields"]:
@@ -809,8 +333,9 @@ class Prompt_Enhancer:
 
         种子 = int(kw.get("种子", 0) or 0)
 
-        content, _usage = self._call_llm(
-            接口格式, api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
+        content, _usage = llm_utils.call_llm(
+            LLM, system_prompt, user_msg,
+            image_b64=参考图b64, seed=种子, error_prefix="[提示词增强器] ",
         )
 
         # 拆分负面提示词：主调用已让 LLM 输出「正文 + 负面提示词: ...」行
@@ -823,37 +348,19 @@ class Prompt_Enhancer:
             content = content.strip()
 
         # 压缩多余空行：连续 2+ 空行压成 1 个空行（分段标题间保持 1 空行）
-        content = _collapse_blank_lines(content)
+        content = llm_utils.collapse_blank_lines(content)
 
         # 二次优化：把第一次输出与已选 tag 清单逐条核对，缺失补写、冲突/弱化以 tag 为准纠正，完整重写
         if 二次优化 == "是" and content.strip():
             try:
-                content = self._second_pass_verify(
-                    接口格式, api_key, tag_lines, content, text, 场景环境,
-                    模型, API基础URL, 温度, 最大token, 种子,
-                )
-                content = _collapse_blank_lines(content)
+                content = self._second_pass_verify(LLM, tag_lines, content, text, 场景环境, 种子)
+                content = llm_utils.collapse_blank_lines(content)
             except Exception:
                 pass  # 二次优化失败不阻断，回落第一次输出
 
         return (content, 负面提示词)
 
-    def _call_llm(
-        self, 接口格式, api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
-    ):
-        """统一 LLM 调用分发（Anthropic 兼容 / OpenAI 兼容）。"""
-        if 接口格式.startswith("Anthropic"):
-            return self._call_anthropic(
-                api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
-            )
-        return self._call_openai(
-            api_key, system_prompt, user_msg, 模型, API基础URL, 温度, 最大token, 参考图b64, 种子
-        )
-
-    def _second_pass_verify(
-        self, 接口格式, api_key, tag_lines, content, text, 场景环境,
-        模型, API基础URL, 温度, 最大token, 种子,
-    ):
+    def _second_pass_verify(self, LLM, tag_lines, content, text, 场景环境, 种子):
         """二次优化：把第一次输出与已选 tag 清单逐条核对，缺失补写、冲突/弱化以 tag 为准纠正，完整重写。"""
         system = (
             "你是提示词质检员。把【第一次增强输出】与【已选 tag 清单】逐条核对，按以下规则修订：\n"
@@ -872,250 +379,10 @@ class Prompt_Enhancer:
             + (f"\n\n【场景环境】\n{场景环境}" if 场景环境 else "")
             + "\n\n请逐条核对每个 tag 是否在输出中得到体现：缺失→补写、冲突/弱化→以 tag 为准纠正、已体现→保留。完整重写输出修订后的正文。"
         )
-        revised, _usage = self._call_llm(
-            接口格式, api_key, system, user_msg, 模型, API基础URL, 温度, 最大token, None, 种子
+        revised, _usage = llm_utils.call_llm(
+            LLM, system, user_msg, seed=种子, error_prefix="[提示词增强器] "
         )
         return revised.strip()
-
-    # ---- Anthropic 兼容（/v1/messages + thinking disabled）----
-    def _call_anthropic(
-        self, api_key, system, user_msg, model, base_url, temperature, max_tokens, image_b64=None, seed=0
-    ):
-        url = base_url.strip().rstrip("/")
-        if not url.endswith("/v1/messages"):
-            url += "/v1/messages"
-        # 支持多模态：image_b64 存在时 content 为 [{type:text},{type:image}]
-        user_content = user_msg
-        if image_b64:
-            media_type = image_b64.split(";", 1)[0].split(":", 1)[1] if ";" in image_b64 else "image/jpeg"
-            data = image_b64.split(",", 1)[1] if "," in image_b64 else image_b64
-            user_content = [
-                {"type": "text", "text": user_msg},
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
-            ]
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system,
-            "thinking": {"type": "disabled"},
-            "messages": [{"role": "user", "content": user_content}],
-        }
-        if seed:
-            payload["seed"] = seed
-        payload["temperature"] = temperature
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        }
-        data = self._post(url, headers, payload, strip_temperature_on_error=True)
-        text_parts = [
-            c.get("text", "")
-            for c in data.get("content", [])
-            if isinstance(c, dict) and c.get("type") == "text"
-        ]
-        content = _strip_code_fences("".join(text_parts))
-        if not content:
-            raise RuntimeError(
-                "[提示词增强器] Anthropic 接口返回空 text。请检查「最大token」是否太小、"
-                "「API基础URL」是否为 Anthropic 兼容地址（.../anthropic）。"
-            )
-        usage = data.get("usage") or {}
-        snap = llm_usage.record(usage.get("input_tokens"), usage.get("output_tokens"))
-        return content, snap
-
-    # ---- OpenAI 兼容（/chat/completions）----
-    def _call_openai(
-        self, api_key, system, user_msg, model, base_url, temperature, max_tokens, image_b64=None, seed=0
-    ):
-        url = base_url.strip().rstrip("/")
-        if not url.endswith("/chat/completions"):
-            url += "/chat/completions"
-        # 支持多模态：image_b64 存在时 user content 为 [{type:text},{type:image_url}]
-        user_content = user_msg
-        if image_b64:
-            user_content = [
-                {"type": "text", "text": user_msg},
-                {"type": "image_url", "image_url": {"url": image_b64}},
-            ]
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
-        if seed:
-            payload["seed"] = seed
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        data = self._post(url, headers, payload, strip_temperature_on_error=False)
-        try:
-            msg = data["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError):
-            raise RuntimeError(f"[提示词增强器] 响应结构异常：{json.dumps(data, ensure_ascii=False)[:500]}")
-        content = _strip_code_fences((msg.get("content") or "").strip())
-        if not content:
-            reasoning = (msg.get("reasoning_content") or "").strip()
-            hint = f"（reasoning 长 {len(reasoning)} 字符，可能被 max_tokens 截断）" if reasoning else ""
-            raise RuntimeError(
-                f"[提示词增强器] 模型返回空 content{hint}：推理模型 reasoning 占用 token，"
-                "请改用「Anthropic 兼容」接口格式（thinking disabled）或调大「最大token」。"
-            )
-        usage = data.get("usage") or {}
-        snap = llm_usage.record(usage.get("prompt_tokens"), usage.get("completion_tokens"))
-        return content, snap
-
-    # ---- 通用 HTTP POST ----
-    def _post(self, url, headers, payload, strip_temperature_on_error):
-        try:
-            req = urllib.request.Request(
-                url, data=json.dumps(payload).encode("utf-8"), headers=headers
-            )
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", "ignore")
-            if strip_temperature_on_error and e.code in (400, 422) and "temperature" in body:
-                payload.pop("temperature", None)
-                req = urllib.request.Request(
-                    url, data=json.dumps(payload).encode("utf-8"), headers=headers
-                )
-                with urllib.request.urlopen(req, timeout=180) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
-            raise RuntimeError(f"[提示词增强器] HTTP {e.code}：{body[:500]}")
-        except Exception as e:
-            raise RuntimeError(f"[提示词增强器] 请求失败：{e}")
-
-
-def setup_routes(server):
-    """注册字典/预设/Tag 管理路由：增强器「刷新字典」+ Tag 管理器前后端。"""
-    from aiohttp import web
-
-    async def handle_dict(request):
-        data = _get_dict()
-        basket_meta = {}
-        for section in data["sections"]:
-            for field in section["fields"]:
-                if field.get("type") == "basket":
-                    basket_meta[field["key"]] = {
-                        "options": field.get("options", []),
-                        "mutually_exclusive": field.get("mutually_exclusive", False),
-                        "conflicts": field.get("conflicts", []),
-                        "condition": field.get("condition"),
-                        "tasks": _tasks_from_condition(field.get("condition")),
-                    }
-        return web.json_response({"basket_meta": basket_meta, "presets": _load_presets()})
-
-    server.routes.get("/bsawang/prompt_enhancer/dict")(handle_dict)
-
-    # ---- Tag 管理器后端：库编辑 / Tag 反推 共用 ----
-
-    async def handle_tag_dict(request):
-        """GET /bsawang/tag/dict：全部篮子（含 guidance/option_guidance，供库编辑器）+ 预设池。"""
-        data = _get_dict()
-        baskets = {}
-        for section in data["sections"]:
-            for field in section["fields"]:
-                if field.get("type") == "basket":
-                    baskets[field["key"]] = {
-                        "options": field.get("options", []),
-                        "guidance": field.get("guidance", []),
-                        "option_guidance": field.get("option_guidance", {}),
-                        "mutually_exclusive": field.get("mutually_exclusive", False),
-                        "conflicts": field.get("conflicts", []),
-                        "condition": field.get("condition"),
-                        "tasks": _tasks_from_condition(field.get("condition")),
-                    }
-        return web.json_response({"baskets": baskets, "presets": _load_presets()})
-
-    async def handle_save_preset(request):
-        try:
-            body = await request.json()
-            name = _save_preset(body.get("name"), body.get("tags") or {}, body.get("guidance", ""), body.get("create"))
-            return web.json_response({"ok": True, "key": name})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    async def handle_rename_preset(request):
-        try:
-            body = await request.json()
-            new_name = _rename_preset(body.get("old_name"), body.get("new_name"), body.get("tags") or {}, body.get("guidance", ""))
-            return web.json_response({"ok": True, "key": new_name})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    async def handle_delete_preset(request):
-        try:
-            body = await request.json()
-            _delete_preset(body.get("name"))
-            return web.json_response({"ok": True})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    async def handle_save_basket(request):
-        try:
-            body = await request.json()
-            key = _save_basket(body.get("key"), body.get("guidance"), body.get("create"))
-            return web.json_response({"ok": True, "key": key})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    async def handle_rename_basket(request):
-        try:
-            body = await request.json()
-            new_key = _rename_basket(body.get("old_key"), body.get("new_key"), body.get("guidance"))
-            return web.json_response({"ok": True, "key": new_key})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    async def handle_delete_basket(request):
-        try:
-            body = await request.json()
-            _delete_basket(body.get("key"))
-            return web.json_response({"ok": True})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    async def handle_save_option(request):
-        try:
-            body = await request.json()
-            _save_option(body.get("basket"), body.get("tag"), body.get("guidance"))
-            return web.json_response({"ok": True})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    async def handle_delete_option(request):
-        try:
-            body = await request.json()
-            _delete_option(body.get("basket"), body.get("tag"))
-            return web.json_response({"ok": True})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    async def handle_add_basket_option(request):
-        try:
-            body = await request.json()
-            _add_basket_option(body.get("basket"), body.get("tag"))
-            return web.json_response({"ok": True})
-        except Exception as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400)
-
-    server.routes.get("/bsawang/tag/dict")(handle_tag_dict)
-    server.routes.post("/bsawang/tag/save_preset")(handle_save_preset)
-    server.routes.post("/bsawang/tag/rename_preset")(handle_rename_preset)
-    server.routes.post("/bsawang/tag/delete_preset")(handle_delete_preset)
-    server.routes.post("/bsawang/tag/save_basket")(handle_save_basket)
-    server.routes.post("/bsawang/tag/rename_basket")(handle_rename_basket)
-    server.routes.post("/bsawang/tag/delete_basket")(handle_delete_basket)
-    server.routes.post("/bsawang/tag/save_option")(handle_save_option)
-    server.routes.post("/bsawang/tag/delete_option")(handle_delete_option)
-    server.routes.post("/bsawang/tag/add_basket_option")(handle_add_basket_option)
 
 
 WEB_DIRECTORY = "./web"

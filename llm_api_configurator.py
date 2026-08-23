@@ -24,15 +24,15 @@ class LLM_API_Configurator:
                         "default": "Anthropic 兼容",
                         "tooltip": (
                             "Anthropic 兼容=/v1/messages + thinking disabled（DeepSeek 推荐："
-                            "敏感内容可过、token 全给正文）；OpenAI 兼容=/chat/completions"
+                            "可过、token 全给正文）；OpenAI 兼容=/chat/completions"
                         ),
                     },
                 ),
                 "模型": (
                     "STRING",
                     {
-                        "default": "deepseek-v4-flash",
-                        "tooltip": "模型名（账号可用模型可用 GET /models 查；DeepSeek 本机为 deepseek-v4-flash / deepseek-v4-pro）",
+                        "default": "deepseek-v4-flash-vision-exp",
+                        "tooltip": "模型名（账号可用模型可用 GET /models 查；DeepSeek 多模态视觉模型为 deepseek-v4-flash-vision-exp，纯文本为 deepseek-v4-flash / deepseek-v4-pro）",
                     },
                 ),
                 "API基础URL": (
@@ -51,8 +51,8 @@ class LLM_API_Configurator:
                 "支持视觉": (
                     ["否", "是"],
                     {
-                        "default": "否",
-                        "tooltip": "该 LLM 是否支持图片输入（GLM-4V / Qwen-VL / Gemini 等视觉模型选「是」；deepseek-v4 纯文本选「否」）。增强器接图时以此判断是否传图",
+                        "default": "是",
+                        "tooltip": "该 LLM 是否支持图片输入（视觉模型选「是」；纯文本模型选「否」）。增强器接图时以此判断是否传图",
                     },
                 ),
             }

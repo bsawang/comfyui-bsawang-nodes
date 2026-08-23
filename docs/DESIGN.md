@@ -15,10 +15,10 @@
 6. 预设系统（presets/，规约见 PRESET_SPEC.md）
 7. 前端直出触发机制
 8. 数据持久化
-9. NSFW 策略
-10. 部署与同步
-11. 边界与未来工作
-12. 踩坑记录
+9. 部署与同步
+10. 边界与未来工作
+11. 踩坑记录
+12. 模块化拆分（待测试后整理）
 
 ---
 
@@ -101,7 +101,7 @@
 ### 4.2 字典系统（dict.json + baskets/）
 
 - `dict.json`：section 骨架（type/type_info/content/output）+ 非篮子控件（任务类型/种子/视频时长/用户提示词/输出设置）
-- `baskets/*.json`：一个篮子一个文件（主题风格/构图风格/光线/景别/氛围/色彩/…含 nsfw-* 系列），含 `options/guidance/option_guidance/conflicts/mutually_exclusive/condition/gate`；**无 `label` 字段**（key=label 单一模型——key 即文件名/显示名/传 LLM 的维度名）
+- `baskets/*.json`：一个篮子一个文件（主题风格/构图风格/光线/景别/氛围/色彩/…等），含 `options/guidance/option_guidance/conflicts/mutually_exclusive/condition/gate`；**无 `label` 字段**（key=label 单一模型——key 即文件名/显示名/传 LLM 的维度名）
 - **动态合并**：启动 + 刷新时按 `section.id` 定位、fields 按 key 去重追加；mtime 缓存；`GET /bsawang/prompt_enhancer/dict` 供前端「刷新字典」按钮
 - 篮子格式与制作规约见 `BASKET_SPEC.md`
 
@@ -110,7 +110,6 @@
 - 所有 system prompt 收在 `templates/`，按任务中文命名，`系统提示词文件` widget 默认指向，改 txt 即生效、不重启
 - **基座模板硬性规则**（`常规文生图.txt` 内置「必填」规则）：身体朝向一致性（人物朝向/视角/机位逻辑一致、禁止朝向反转）、景别-画幅一致性（人物占画幅比例必须匹配景别）、如实描述（已选内容要素不夸大不弱化）、**规则10 tag 优先级高于用户输入**
 - **内容锚点软耦合**（历史）：曾用模板声明【已加载tag】触发增强器注入全量篮子选项（tag 对照模式）；该模式已被 Tag_Reverse 节点取代，2026-08-22 移除
-- NSFW 变体 `{key}.nsfw.txt` 按 `.gitignore *nsfw*` 忽略（本地保留不上远程）
 
 ### 4.4 前端面板体系
 
@@ -240,7 +239,7 @@
 
 预设 = 跨多个篮子的一组 tag 捆绑（一键填篮子），复杂风格（天宫）用它打包多维度。**完整格式/约束/质检/制作流程见 [`PRESET_SPEC.md`](PRESET_SPEC.md)**，本节只记设计要点：
 
-- 一个预设一个文件 `presets/{key}.json`：`{key, guidance, tags}`（**无 `label` 字段，key=name=文件名单一模型**）；NSFW 变体 `{key}.nsfw.json`
+- 一个预设一个文件 `presets/{key}.json`：`{key, guidance, tags}`（**无 `label` 字段，key=name=文件名单一模型**）
 - **应用 = 覆盖所涉篮子**（替换该篮子当前选择），未涉及的篮子不动，应用后可微调
 - `tags` 的篮子 key 必须在当前字典内（不存在 → 应用跳过并提示）；tag 值不必已在篮子 options（应用只填状态，LLM 运行时把选中的 tag 传给增强器）
 - **消费方**：Tag_Reverse（存为预设）、Tag_Library（应用/存/删/重命名）、Prompt_Enhancer（「预设」tab 应用，读 /dict 的 presets 字段）
@@ -265,29 +264,22 @@ Tag_Reverse 执行 → 输出流向 PreviewAny
 
 | 数据 | 位置 | 生命周期 |
 |---|---|---|
-| 篮子定义 | `baskets/*.json` | 持久（git 跟踪；nsfw-* 忽略）|
+| 篮子定义 | `baskets/*.json` | 持久（git 跟踪）|
 | 字典骨架 | `dict.json` | 持久（git 跟踪）|
-| 预设 | `presets/*.json` | 持久（git 跟踪；nsfw 变体忽略）|
+| 预设 | `presets/*.json` | 持久（git 跟踪）|
 | 任务增强要点 | `tasks.json` | 持久（git 跟踪）|
-| system prompt | `templates/*.txt` | 持久（git 跟踪；nsfw 变体忽略）|
+| system prompt | `templates/*.txt` | 持久（git 跟踪）|
 | token 统计 | `llm_usage.py` 进程内 | 会话级（重启清空）|
 | 反推中间结果 | 节点输出 | 不持久（中间节点直出）|
 
-## 9. NSFW 策略
-
-- 产出文件含 NSFW → `-NSFW` / `.nsfw` 后缀 + `tags: [nsfw]`
-- `.gitignore` 含 `*nsfw*`：NSFW 文件本地 git 保留、不上远程
-- 命名约定：模板 `.nsfw.txt`、预设 `.nsfw.json`、篮子 `nsfw-*.json`
-- 发布时按后缀/标签筛选（子目录/稀疏检出/分仓库）
-
-## 10. 部署与同步
+## 9. 部署与同步
 
 - **仓库**：`assets/nodes/bsawang-nodes/`（独立 git 仓库，aigc-study 内嵌）
 - **运行副本**：`custom_nodes/ComfyUI-bsawang/`——改代码后手动同步（py/js/templates/baskets/presets），重启 ComfyUI 生效
 - **前端 JS 改动**：仅 F5 强刷（Ctrl+Shift+R）即可
 - **测试工作流**：`docs/tag_reverse_spike.json`、`docs/tag_library_spike.json`、`docs/workflow_sample.json`
 
-## 11. 边界与未来工作
+## 10. 边界与未来工作
 
 | 项 | 状态 |
 |---|---|
@@ -297,7 +289,7 @@ Tag_Reverse 执行 → 输出流向 PreviewAny
 | 多 Tag_Reverse 节点同一工作流 | 各自独立面板，互不干扰（executed 事件按节点回溯）|
 | 篮子编辑写回完整校验 | 库编辑「编辑篮子」目前只加选项，增删/改 guidance 待接 |
 
-## 12. 踩坑记录（汇总）
+## 11. 踩坑记录（汇总）
 
 | 坑 | 结论 |
 |---|---|
@@ -309,3 +301,58 @@ Tag_Reverse 执行 → 输出流向 PreviewAny
 | 标签/文件名耦合静默失效 | 用内容锚点软耦合（模板声明触发）|
 | 运行副本落后仓库 | 改完必须手动同步 + diff 核对 |
 | 轮询刷新有延迟 + 后台状态 | 中间节点用直出（executed 回溯），不轮询 |
+
+---
+
+## 12. 模块化拆分（待测试后整理）
+
+> ⚠️ **状态：2026-08-23 完成代码拆分 + mock 回归通过，待 ComfyUI 实测确认后整理**。
+> 本章记录 1128→395 行的结构性重构，与 §2/§4/§5 旧描述并存，实测无回归后合并进对应章节。
+
+### 13.1 目标与原则
+
+- **node 只留领域逻辑**：通用能力与数据层抽离，节点文件瘦身、职责单一
+- **依赖方向反转**：节点 import 数据层，而非数据层借宿节点文件
+- **模板本地覆盖**：public 仓库只跟踪干净版，本地变体存在即优先（零手动切换）
+
+### 13.2 模块结构（新）
+
+| 模块 | 行数 | 职责 |
+|---|---|---|
+| `llm_utils.py` | 263 | 通用 LLM 层：`call_llm`（Anthropic/OpenAI 多模态统一）/ `read_system_prompt` / `image_to_base64` / `parse_json` / `stable_config` / `collapse_blank_lines` |
+| `tag_store.py` | 542 | tag 持久层真相源：dict/baskets/presets CRUD + 组合自检 + 11 条 HTTP 路由（含 `/bsawang/tag/*` 与增强器 dict） |
+| `prompt_enhancer.py` | 395 | 只留增强节点：任务模板 / 负面词库 / widget 构建 / 增强流程 / 二次优化 |
+| `tag_reverse.py` | 205 | 只留 tag 匹配领域逻辑：双匹配模式 / 引导词归纳 |
+| `h3_api_prompt_formatter.py` | 112 | 只留 H3 格式化逻辑 |
+
+### 13.3 关键机制
+
+- **`llm_utils.call_llm(config, system, user_msg, image_b64, seed, error_prefix)`** → `(content, usage_snapshot)`
+  - 统一 Anthropic/OpenAI 多模态；行为基准 = 原 prompt_enhancer 最全版（seed / thinking disabled / temperature 失败重试 / reasoning 提示）
+  - `error_prefix` 保留各节点 `[增强器]`/`[H3-API]`/`[Tag反推]` 报错前缀
+- **`tag_store.setup_routes(server)`**：路由从 prompt_enhancer 迁入 tag_store，`__init__.py` 改接
+- **Tag_Reverse 双匹配模式**（§5.4 旧表需更新）：
+  - `匹配模式` widget：`文字匹配`（默认）/ `图片直匹配`
+  - 系统提示词按功能模块内部加载，**不向外暴露**（移除 3 个系统提示词文件 widget）
+  - 图片直匹配：图+tag池一次调用 → JSON 含 `反推文字`+`matched`+`suggestions`；两模式均归纳引导词
+- **本地覆盖机制**（`llm_utils.pick_template`，宽规则）：
+  - 模板读取：`templates/{base}.*.txt` 任意后缀变体存在 → 优先（多后缀取）；否则回落跟踪的 `{base}.txt`
+  - 代码不依赖具体后缀字面
+  - 已应用：图片反推模板（`图片多维分析`）、H3 模板（`H3视频提示词格式化`）
+  - 效果：public 干净 + 本地无限制，零手动切换、不暴露 UI
+
+### 13.4 模板布局（图片反推）
+
+| 模板 | 内容 | git | 读取规则 |
+|---|---|---|---|
+| `图片多维分析.txt` | 12 维 | 跟踪 | 无本地变体时的默认 |
+| `图片多维分析.*.txt`（本地变体） | 含完整解构 | 忽略（本地） | 存在即优先 |
+| `Tag反推结构化.txt` / `图片直匹配.txt` | 匹配模板（含输入/输出契约段）| 跟踪 | 固定 |
+
+### 13.5 待实测确认项
+
+- [ ] ComfyUI 重启后 5 节点正常注册（llm_utils/tag_store import 无循环）
+- [ ] 增强器 / Tag 反推（双模式）/ H3 三个节点各跑一次既有工作流
+- [ ] `/bsawang/tag/*` 路由可用（库编辑面板 + 反推面板存预设）
+- [ ] 本地模板变体自动生效、public 回落基座版
+- [ ] 确认后：本章并入 §2/§4/§5，清理旧表

@@ -2,5 +2,4 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
-*nsfw*
 AGENT-LOGGER.md

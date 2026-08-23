@@ -260,12 +260,7 @@ function createReversePanel(node, nodeData) {
     domWidget.options.getMinHeight = () => 0;
     domWidget.options.getHeight = () => "100%";
 
-    // 系统提示词文件 widget 移到节点最底部（面板之后）——用户接受保存重载串位风险
-    const spW = (node.widgets || []).find((w) => w.name === "系统提示词文件");
-    if (spW) {
-        node.widgets = node.widgets.filter((w) => w !== spW);
-        node.widgets.push(spW);
-    }
+    // 系统提示词文件相关 widget 已改为内部模块（templates/*.txt 内部加载），不再暴露——无需重排
 
     function syncFromWidget() {
         // 已运行过：面板状态优先，不被旧 widget 值覆盖；未运行（跨刷新/加载）则清掉旧匹配
