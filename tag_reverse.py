@@ -64,13 +64,14 @@ def _validate_parsed(parsed) -> tuple:
     return valid_matched, clean_suggestions, text
 
 
-def _run_match(config, text):
+def _run_match(config, text, seed=0):
     """文字匹配：反推文字 → 结构化 matched + suggestions。返回 (matched, suggestions, text)。"""
     system = llm_utils.read_system_prompt(str(TEMPLATE_PATH), error_prefix=_ERROR_PREFIX)
     user_msg = f"【反推文字】\n{text}\n\n【已加载tag】\n{_pool_block()}"
     # 匹配是分类任务：强制低温（0.0）减少飘逸，结果更稳定
     content, _ = llm_utils.call_llm(
-        llm_utils.stable_config(config, 0.0), system, user_msg, error_prefix=_ERROR_PREFIX
+        llm_utils.stable_config(config, 0.0), system, user_msg,
+        seed=seed, error_prefix=_ERROR_PREFIX,
     )
     valid_matched, clean_suggestions, _ = _validate_parsed(
         llm_utils.parse_json(content, error_prefix=_ERROR_PREFIX)
@@ -78,7 +79,7 @@ def _run_match(config, text):
     return valid_matched, clean_suggestions, text
 
 
-def _run_image_match(config, image):
+def _run_image_match(config, image, seed=0):
     """图片直匹配：图 + tag池 一次调用 → matched + suggestions + 反推文字。返回 (matched, suggestions, text)。"""
     if not config.get("支持视觉", False):
         raise ValueError(
@@ -88,9 +89,10 @@ def _run_image_match(config, image):
     image_b64 = llm_utils.image_to_base64(image)
     system = llm_utils.read_system_prompt(str(IMAGE_MATCH_TEMPLATE_PATH), error_prefix=_ERROR_PREFIX)
     user_msg = f"【已加载tag】\n{_pool_block()}\n\n请分析图片并对照 tag 池，只输出严格 JSON。"
+    # 温度 0.2：与文字匹配的反推步同温（A/B 对比去温度混杂）；单调用故匹配步也同温
     content, _ = llm_utils.call_llm(
-        llm_utils.stable_config(config, 0.0), system, user_msg,
-        image_b64=image_b64, error_prefix=_ERROR_PREFIX,
+        llm_utils.stable_config(config, 0.2), system, user_msg,
+        image_b64=image_b64, seed=seed, error_prefix=_ERROR_PREFIX,
     )
     valid_matched, clean_suggestions, text = _validate_parsed(
         llm_utils.parse_json(content, error_prefix=_ERROR_PREFIX)
@@ -98,7 +100,7 @@ def _run_image_match(config, image):
     return valid_matched, clean_suggestions, text
 
 
-def _reverse_image(config, image):
+def _reverse_image(config, image, seed=0):
     """图片反推：多模态 LLM 按多维分析模板把图片转成结构化描述文本（反推文字）。"""
     if not config.get("支持视觉", False):
         raise ValueError(
@@ -110,12 +112,12 @@ def _reverse_image(config, image):
     user_msg = "请按系统提示词要求，完整、结构化地分析这张图片。"
     content, _ = llm_utils.call_llm(
         llm_utils.stable_config(config, 0.2), system, user_msg,
-        image_b64=image_b64, error_prefix=_ERROR_PREFIX,
+        image_b64=image_b64, seed=seed, error_prefix=_ERROR_PREFIX,
     )
     return content.strip()
 
 
-def _generate_guidance(config, text):
+def _generate_guidance(config, text, seed=0):
     """独立调用：把反推文字归纳成一段预设引导词（纯文本输出，无 JSON 解析风险）。"""
     system = (
         "你是 AI 图像生成场景归纳助手。把用户给的场景描述归纳成一段预设引导词（1-2 句），"
@@ -124,12 +126,16 @@ def _generate_guidance(config, text):
     )
     user_msg = f"【场景描述】\n{text}"
     content, _ = llm_utils.call_llm(
-        llm_utils.stable_config(config, 0.2), system, user_msg, error_prefix=_ERROR_PREFIX
+        llm_utils.stable_config(config, 0.2), system, user_msg,
+        seed=seed, error_prefix=_ERROR_PREFIX,
     )
     return content.strip().strip('"').strip("'")
 
 
 class Tag_Reverse:
+    # 输出节点标记：反推可作终结节点（无输出连接也能跑，ComfyUI 不再报「工作流未包含输出节点」）
+    OUTPUT_NODE = True
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -154,6 +160,15 @@ class Tag_Reverse:
                         "tooltip": "文字匹配=反推文字/图片反推后按文字匹配（现状）；图片直匹配=图+tag池一次调用直接匹配（A/B 实验，比「图片理解 vs 文字理解」的匹配准确度）",
                     },
                 ),
+                "种子": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 0xffffffffffffffff,
+                        "tooltip": "LLM 采样种子：改值破缓存重跑（A/B 对照用），同种子可复现",
+                    },
+                ),
                 "LLM": ("LLM_CONFIG", {}),
                 # 系统提示词按功能模块内部加载（templates/*.txt，见模块顶部常量），不向外暴露；
                 # 自定义 = 直接改 templates/ 下对应 txt 文件（改 txt 即生效）
@@ -170,36 +185,44 @@ class Tag_Reverse:
     FUNCTION = "process"
     CATEGORY = "bsawang/提示词增强器"
 
-    def process(self, 反推文字, LLM=None, 图片=None, 匹配模式="文字匹配", **kw):
+    def process(self, 反推文字, LLM=None, 图片=None, 匹配模式="文字匹配", 种子=0, **kw):
         if not isinstance(LLM, dict) or not LLM.get("模型"):
             raise ValueError(f"{_ERROR_PREFIX}需要接「LLM API 设定器」的输出。")
+        种子 = int(种子 or 0)
 
         if 匹配模式 == "图片直匹配":
             # A/B 实验臂：图 + tag池 一次调用直接匹配（匹配阶段真看图）
             if 图片 is None:
                 raise ValueError(f"{_ERROR_PREFIX}图片直匹配模式需要接「图片」输入。")
-            valid_matched, clean_suggestions, text = _run_image_match(LLM, 图片)
+            valid_matched, clean_suggestions, text = _run_image_match(LLM, 图片, seed=种子)
         else:
             # 图片反推优先：有图 → 多模态 LLM 直接反推；无图 → 用反推文字输入
             if 图片 is not None:
-                text = _reverse_image(LLM, 图片)
+                text = _reverse_image(LLM, 图片, seed=种子)
             else:
                 text = (反推文字 or "").strip()
             if not text:
                 raise ValueError(f"{_ERROR_PREFIX}反推文字为空：请填「反推文字」或接「图片」输入。")
-            valid_matched, clean_suggestions, _ = _run_match(LLM, text)
+            valid_matched, clean_suggestions, _ = _run_match(LLM, text, seed=种子)
 
         # 两模式都归纳引导词（基于反推文字）
         try:
-            guidance = _generate_guidance(LLM, text)
+            guidance = _generate_guidance(LLM, text, seed=种子)
         except Exception:
             guidance = ""  # 引导词归纳失败不阻塞主匹配
         full = {"matched": valid_matched, "suggestions": clean_suggestions, "引导词": guidance, "反推文字": text}
-        return (
-            json.dumps(valid_matched, ensure_ascii=False),
-            json.dumps(full, ensure_ascii=False),
-            text,
-        )
+        full_json = json.dumps(full, ensure_ascii=False)
+        # 返回 ui 让节点自身触发 executed 事件 → 面板刷新不依赖下游文本显示节点
+        # （自定义键 bsawang_reverse 携带反推结果 JSON，前端从 output.bsawang_reverse[0] 提取，
+        #   不用 text 键避免 ComfyUI 文本渲染；result 仍是 3 路 STRING 输出）
+        return {
+            "ui": {"bsawang_reverse": [full_json]},
+            "result": (
+                json.dumps(valid_matched, ensure_ascii=False),
+                full_json,
+                text,
+            ),
+        }
 
 
 NODE_CLASS_MAPPINGS = {"Tag_Reverse": Tag_Reverse}

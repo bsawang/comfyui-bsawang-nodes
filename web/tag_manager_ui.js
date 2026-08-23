@@ -691,6 +691,7 @@ function extractFullResult(output) {
     if (!output) return null;
     let s = null;
     if (Array.isArray(output)) s = output[1];
+    else if (output.bsawang_reverse != null) s = Array.isArray(output.bsawang_reverse) ? output.bsawang_reverse[0] : output.bsawang_reverse;
     else if (output.text != null) s = Array.isArray(output.text) ? output.text[0] : output.text;
     else s = output["反推结果"];
     if (!s) return null;

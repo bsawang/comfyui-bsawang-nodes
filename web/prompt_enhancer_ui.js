@@ -468,11 +468,10 @@ function createPanel(node, nodeData) {
     domWidget.options.getMinHeight = () => 0;
     domWidget.options.getHeight = () => "100%";
 
-    // 把面板 widget 移到「用户提示词-2 / 用户提示词」后面（自定义控件紧跟用户输入，篮子面板在两个文本输入之后）
+    // 把面板 widget 移到「用户提示词」后面（自定义控件紧跟用户输入，篮子面板在文本输入之后）
     const ws = node.widgets;
     const panelIdx = ws.indexOf(domWidget);
-    let promptIdx = ws.findIndex((w) => w.name === "用户提示词-2");
-    if (promptIdx < 0) promptIdx = ws.findIndex((w) => w.name === "用户提示词");
+    const promptIdx = ws.findIndex((w) => w.name === "用户提示词");
     if (panelIdx >= 0 && promptIdx >= 0) {
         ws.splice(panelIdx, 1);
         ws.splice(promptIdx + 1, 0, domWidget);
@@ -550,6 +549,40 @@ function findUpstreamUsageNode(node, visited) {
     return null;
 }
 
+// ---------- 素材口自增长 ----------
+// 只显示「已连接的素材口 + 下一个空口」；连上后自动补下一个（后端已声明 素材1..素材16）
+// 安全策略：只移除尾部未连接的口（其后无已连接，不破坏连线索引）
+function setupMaterialPorts(node) {
+    if (node._bsawangMatInited) return;
+    node._bsawangMatInited = true;
+    const CAP = 16;
+    const isMat = (n) => n && /^素材\d+$/.test(n.name);
+    const matNum = (n) => parseInt(n.name.replace("素材", ""), 10);
+    function sync() {
+        if (!node.inputs) return;
+        let maxConnected = 0;
+        for (const inp of node.inputs) if (isMat(inp) && inp.link != null) maxConnected = Math.max(maxConnected, matNum(inp));
+        const maxVisible = Math.min(maxConnected + 1, CAP);
+        // 移除尾部未连接的素材口（安全：仅动 >maxVisible 的，其后必无已连接）
+        node.inputs = node.inputs.filter((inp) => !isMat(inp) || matNum(inp) <= maxVisible);
+        // 补足 1..maxVisible 缺失的口（addInput 追加到末尾，保持素材口顺序在尾部）
+        for (let i = 1; i <= maxVisible; i++) {
+            if (!node.inputs.some((inp) => inp.name === `素材${i}`)) {
+                try { node.addInput(`素材${i}`, "MATERIAL", null, { optional: true }); } catch (e) { /* 忽略 */ }
+            }
+        }
+        node.setDirtyCanvas?.(true, true);
+    }
+    node._bsawangMatSync = sync;
+    // 初始：工作流加载后连线已恢复时再同步（onConnectionsChange 加载期也会触发）
+    setTimeout(sync, 50);
+    const prevConn = node.onConnectionsChange;
+    node.onConnectionsChange = function (type, index, connected, link) {
+        if (typeof prevConn === "function") prevConn.apply(this, arguments);
+        if (type === LiteGraph.INPUT && node._bsawangMatSync) node._bsawangMatSync();
+    };
+}
+
 // ---------- 注册 ----------
 app.registerExtension({
     name: "bsawang.prompt_enhancer",
@@ -576,6 +609,7 @@ app.registerExtension({
             const result = previous?.apply(this, arguments);
             if (isEnhancer) {
                 if (!this._bsawangBasketReady && createPanel(this, nodeData)) this._bsawangBasketReady = true;
+                setupMaterialPorts(this);  // 素材口自增长：只显示已连接 + 下一个空口
             } else if (name === "H3_API_PromptFormatter" && !this._bsawangH3Ready) {
                 this._bsawangH3Ready = createH3Panel(this) === true;
             }

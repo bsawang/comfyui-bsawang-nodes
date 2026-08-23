@@ -77,19 +77,55 @@ def collapse_blank_lines(text: str) -> str:
 
 
 def parse_json(content, error_prefix="") -> dict:
-    """从 LLM 输出提取 JSON（容忍 markdown 代码围栏/前后缀）。"""
+    """从 LLM 输出提取 JSON（容忍代码围栏/尾逗号/注释/字符串内花括号）。"""
+    import re
     text = content.strip()
+    # 去 markdown 代码围栏
     if text.startswith("```"):
         text = text.strip("`").strip()
         if text.startswith("json"):
             text = text[4:].strip()
-    s, e = text.find("{"), text.rfind("}")
-    if s < 0 or e < 0:
+    # 从第一个 { 括号配平找结束（容忍字符串值里的 { }）
+    start = text.find("{")
+    if start < 0:
         raise RuntimeError(f"{error_prefix}LLM 输出不含 JSON：{content[:300]}")
+    depth = 0
+    in_str = False
+    esc = False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
+        raise RuntimeError(f"{error_prefix}JSON 括号未闭合（可能被 max_tokens 截断，请调大「最大token」）：{content[:300]}")
+    json_str = text[start : end + 1]
+    # 清尾逗号（LLM 常见产物：",}" / ",]"）
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
     try:
-        return json.loads(text[s : e + 1])
+        return json.loads(json_str)
     except Exception:
-        raise RuntimeError(f"{error_prefix}JSON 解析失败：{text[s : e + 1][:300]}")
+        # 回落：去 // 行注释 与 /* */ 块注释（LLM 偶尔加）
+        cleaned = re.sub(r"/\*.*?\*/", "", json_str, flags=re.S)
+        cleaned = re.sub(r"(?m)//.*$", "", cleaned)
+        try:
+            return json.loads(cleaned)
+        except Exception:
+            raise RuntimeError(f"{error_prefix}JSON 解析失败：{json_str[:300]}")
 
 
 # ---------- 图片 ----------
@@ -150,10 +186,20 @@ def _post_json(url, headers, payload, strip_temperature_on_error=False, error_pr
 # ---------- LLM 调用（统一入口） ----------
 
 
+def _normalize_images(image_b64):
+    """归一化图片参数：None / 单张 str / 多张 list → list（或 None）。"""
+    if image_b64 is None:
+        return None
+    if isinstance(image_b64, (list, tuple)):
+        return list(image_b64)
+    return [image_b64]
+
+
 def call_llm(config, system, user_msg, image_b64=None, seed=0, error_prefix=""):
     """统一 LLM 调用：Anthropic 兼容 / OpenAI 兼容 + 多模态。
 
     config: LLM_API_Configurator 输出的 LLM_CONFIG（接口格式/模型/API基础URL/APIKey环境变量/温度/最大token）。
+    image_b64: 单张 data URI 或 data URI 列表（多图）。
     返回 (content, usage_snapshot)。content 已去代码围栏/strip。
     """
     interface = config.get("接口格式") or "Anthropic 兼容"
@@ -184,15 +230,15 @@ def _call_anthropic(
     url = base_url.rstrip("/")
     if not url.endswith("/v1/messages"):
         url += "/v1/messages"
-    # 支持多模态：image_b64 存在时 content 为 [{type:text},{type:image}]
+    # 支持多模态（单张或多张）：image_b64 存在时 content 为 [{type:text}, {type:image}...]
+    images = _normalize_images(image_b64)
     user_content = user_msg
-    if image_b64:
-        media_type = image_b64.split(";", 1)[0].split(":", 1)[1] if ";" in image_b64 else "image/jpeg"
-        data = image_b64.split(",", 1)[1] if "," in image_b64 else image_b64
-        user_content = [
-            {"type": "text", "text": user_msg},
-            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
-        ]
+    if images:
+        user_content = [{"type": "text", "text": user_msg}]
+        for b64 in images:
+            media_type = b64.split(";", 1)[0].split(":", 1)[1] if ";" in b64 else "image/jpeg"
+            data = b64.split(",", 1)[1] if "," in b64 else b64
+            user_content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
     payload = {
         "model": model,
         "max_tokens": max_tokens,
@@ -232,13 +278,13 @@ def _call_openai(
     url = base_url.rstrip("/")
     if not url.endswith("/chat/completions"):
         url += "/chat/completions"
-    # 支持多模态：image_b64 存在时 user content 为 [{type:text},{type:image_url}]
+    # 支持多模态（单张或多张）：image_b64 存在时 user content 为 [{type:text}, {type:image_url}...]
+    images = _normalize_images(image_b64)
     user_content = user_msg
-    if image_b64:
-        user_content = [
-            {"type": "text", "text": user_msg},
-            {"type": "image_url", "image_url": {"url": image_b64}},
-        ]
+    if images:
+        user_content = [{"type": "text", "text": user_msg}]
+        for b64 in images:
+            user_content.append({"type": "image_url", "image_url": {"url": b64}})
     payload = {
         "model": model,
         "messages": [

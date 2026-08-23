@@ -33,6 +33,20 @@ def _load_tasks() -> dict:
 
 TASKS = _load_tasks()
 
+# 图生图类任务：需强制接图片素材（源图锚点）
+IMAGE_TASKS = {"图生图(I2I)", "图生视频(I2V)"}
+
+# 角色提取边界（角色隔离）：每个角色反推时只看图提取对应维度，不透全图/不越界
+角色提取提示 = {
+    "风格参考": "只看图提取画风/光影/质感/色彩倾向，不透场景内容",
+    "环境参考": "只看图提取环境类型，不提取氛围/风格/具体元素",
+    "角色参考": "只看图提取人物外观，不透环境/风格",
+    "构图参考": "只看图提取构图/机位/视角",
+    "动作参考": "只看图提取动作/姿态",
+    "道具参考": "只看图提取道具/物体（款式/材质/颜色），不提取主体/环境/风格",
+    "音频参考": "只提取声音/氛围",
+}
+
 # 默认负面词基础库（中文，按质量/解剖/安全分类）——LLM 生成负面词时先列这些，再补充本次内容特定项
 DEFAULT_NEGATIVE = [
     "模糊", "低分辨率", "噪点", "JPEG伪影", "水印", "乱码", "变形", "比例失调", "过度锐化",
@@ -179,9 +193,12 @@ class Prompt_Enhancer:
             "STRING",
             {"default": str(NODE_DIR / "templates" / "常规文生图.txt"), "tooltip": "增强规则 system prompt；文件缺失/读取失败时回落内置默认"},
         )
-        optional = {
-            "参考图": ("IMAGE", {"tooltip": "可选：图生图/图生视频的参考图。仅当 LLM 设定器「支持视觉=是」时生效；否则忽略（降级纯文本）"}),
-        }
+        optional = {}
+        for i in range(1, 17):
+            optional[f"素材{i}"] = (
+                "MATERIAL",
+                {"tooltip": f"素材{i}：素材封装器输出（角色/标签/反推/内容），按素材使用说明（常规文生图.txt）使用；未接则忽略"},
+            )
         return {"required": required, "optional": optional}
 
     RETURN_TYPES = ("STRING", "STRING")
@@ -189,33 +206,83 @@ class Prompt_Enhancer:
     FUNCTION = "enhance"
     CATEGORY = "bsawang/提示词增强器"
 
-    def enhance(self, LLM, 用户提示词, 系统提示词文件, 参考图=None, **kw):
+    def enhance(self, LLM, 用户提示词, 系统提示词文件, **kw):
         text = (用户提示词 or "").strip()
-        if not text:
-            return ("", "")
-        # 用户提示词-2：可选场景环境输入（可空；有值则作为场景环境补充，不覆盖主体）
-        场景环境 = (kw.get("用户提示词-2") or "").strip()
+        # 用户提示词作为补充说明（主体/场景等细节，素材已定义的由素材提供）；素材驱动时可空
 
         # 从 LLM_CONFIG 取连接配置
         if not isinstance(LLM, dict) or not LLM.get("模型"):
             raise ValueError("[提示词增强器] LLM 连接无效：请接「LLM API 设定器」的输出。")
         支持视觉 = LLM.get("支持视觉", False)
 
-        # 参考图 → base64（仅 LLM 支持视觉时；否则降级纯文本）
-        参考图b64 = None
-        if 参考图 is not None:
-            if 支持视觉:
-                try:
-                    参考图b64 = llm_utils.image_to_base64(参考图)
-                except Exception as e:
-                    raise ValueError(f"[提示词增强器] 参考图转 base64 失败：{e}")
-            # 不支持视觉：不报错，降级——LLM 看不到图，靠 text 描述
+        # 任务类型（必填）：决定图生图强制素材、前置提示词与素材标记
+        任务类型 = kw.get("任务类型", "文生图(T2I)")
+        is_image_task = 任务类型 in IMAGE_TASKS
+
+        # 收集素材（素材封装器输出，自增口 素材1..素材16）；按配置构建注入
+        # 反推=是的图片 → 附加给 LLM 看图反推；反推=否 → 仅角色定义（<标签> 标记，不处理图像）
+        素材列表 = []
+        for i in range(1, 17):
+            m = kw.get(f"素材{i}")
+            if isinstance(m, dict) and m.get("类型"):
+                素材列表.append(m)
+        # 用户提示词与素材都空 → 无事可做；有素材则继续（素材驱动，用户提示词仅补充）
+        if not text and not 素材列表:
+            return ("", "")
+        # 图生图/图生视频：强制接图片素材（源图锚点）
+        if is_image_task and not any(m.get("类型") == "图片" for m in 素材列表):
+            raise ValueError("[提示词增强器] 图生图/图生视频需要接图片素材：请用「素材封装器」接图片（角色可设内容/角色参考，反推按需）")
+        素材行 = []
+        素材定义输出 = []
+        附加图片 = []
+        图片编号 = 0
+        for m in 素材列表:
+            t = m.get("类型")
+            role = m.get("角色") or "素材"
+            label = (m.get("标签") or "").strip() or role
+            rev = bool(m.get("反推"))
+            # 图生图：图片素材编号（图片1..N）+ 前置素材定义「图片N<标签>：角色」输出
+            # 文生图：素材不标 <标签>（无下游参考匹配），纯内容注入
+            if t == "图片" and is_image_task:
+                图片编号 += 1
+                素材定义输出.append(f"图片{图片编号}<{label}>：{role}")
+            if t == "文本":
+                if is_image_task:
+                    素材行.append(f"文本素材·{role}：{m.get('数据')}")
+                else:
+                    素材行.append(f"【素材·{role}】：{m.get('数据')}")
+            elif t == "图片":
+                # 角色提取边界（角色隔离）：按角色只看图提取对应维度，不透全图
+                提取提示 = 角色提取提示.get(role, f"看图提取「{role}」内容")
+                if rev and 支持视觉:
+                    try:
+                        附加图片.append(llm_utils.image_to_base64(m.get("数据")))
+                    except Exception as e:
+                        raise ValueError(f"[提示词增强器] 素材「{role}」图片转 base64 失败：{e}")
+                    if is_image_task:
+                        素材行.append(f"图片{图片编号}<{label}>：{role}（源图，{提取提示}；可结合 tag/用户输入修改）")
+                    else:
+                        素材行.append(f"【素材·{role}】：附参考图（{提取提示}；可改属性 tag>用户输入>素材）")
+                else:
+                    if is_image_task:
+                        素材行.append(f"图片{图片编号}<{label}>：{role}（源图，仅角色定义，{提取提示}，可修改）")
+                    else:
+                        素材行.append(f"【素材·{role}】：仅角色定义（未反推，不描述图像内容）")
+            elif t in ("视频", "音频"):
+                素材行.append(f"【素材·{role}】：{t}素材（按素材使用说明，未提及则不输出）")
 
         system_prompt = _read_system_prompt(系统提示词文件)
 
-        # 任务类型（必填）：决定视频时长等条件字段是否生效
-        任务类型 = kw.get("任务类型", "文生图(T2I)")
-        任务类型行 = f"任务类型：{任务类型}"
+        # 任务类型行（前置提示词按任务区分：图生图源图为内容基础、按素材角色提取、可修改）
+        if is_image_task:
+            任务类型行 = (
+                f"任务类型：{任务类型}（图生图：源图为内容基础，按素材定义角色提取，可修改；"
+                "⚠️ 输出提示词正文即可（素材定义由系统前置，勿重复输出、勿把素材定义/分类名/图片编号写进正文）；"
+                "提及对应角色/风格/内容时只用 <标签> 内联指代（如 <123>），不重复「角色参考/风格参考」等分类名或「图片N」；"
+                "禁止「保持同一角色」「保留原图」「将X改为Y」等编辑声明/前后对比，直接用 <标签> 开头描述主体）"
+            )
+        else:
+            任务类型行 = f"任务类型：{任务类型}"
 
         # 从隐藏 state widget 解析篮子已选 tag（JSON：{字段key: [tag列表]}）；预设引导语单独提取
         preset_guidance = ""
@@ -262,7 +329,7 @@ class Prompt_Enhancer:
                 continue  # 输出设置单独处理
             for field in section["fields"]:
                 key = field["key"]
-                if key in ("用户提示词", "用户提示词-2", "任务类型"):
+                if key in ("用户提示词", "任务类型"):
                     continue
                 # 条件字段（视频时长/镜头运动等）：仅当任务类型匹配时传
                 if field.get("condition"):
@@ -327,15 +394,15 @@ class Prompt_Enhancer:
             "『连贯一段』时输出自然段落。"
             f"{负面说明}"
             "直接输出增强后的提示词本身，不要任何前言、解释或 markdown 代码块。\n\n"
-            f"【用户提示词】\n{text}"
-            + (f"\n\n【场景环境】\n{场景环境}" if 场景环境 else "")
+            + ((f"【素材定义】\n" if is_image_task else f"【素材】\n") + "\n".join(素材行) + "\n\n" if 素材行 else "")
+            + f"【用户提示词】\n{text}"
         )
 
         种子 = int(kw.get("种子", 0) or 0)
 
         content, _usage = llm_utils.call_llm(
             LLM, system_prompt, user_msg,
-            image_b64=参考图b64, seed=种子, error_prefix="[提示词增强器] ",
+            image_b64=附加图片 or None, seed=种子, error_prefix="[提示词增强器] ",
         )
 
         # 拆分负面提示词：主调用已让 LLM 输出「正文 + 负面提示词: ...」行
@@ -353,14 +420,17 @@ class Prompt_Enhancer:
         # 二次优化：把第一次输出与已选 tag 清单逐条核对，缺失补写、冲突/弱化以 tag 为准纠正，完整重写
         if 二次优化 == "是" and content.strip():
             try:
-                content = self._second_pass_verify(LLM, tag_lines, content, text, 场景环境, 种子)
+                content = self._second_pass_verify(LLM, tag_lines, content, text, 种子)
                 content = llm_utils.collapse_blank_lines(content)
             except Exception:
                 pass  # 二次优化失败不阻断，回落第一次输出
 
+        # 图生图：前置素材定义（图片N<标签>：角色）到最终提示词，供下游参考匹配
+        if is_image_task and 素材定义输出:
+            content = "\n".join(素材定义输出) + "\n\n" + content
         return (content, 负面提示词)
 
-    def _second_pass_verify(self, LLM, tag_lines, content, text, 场景环境, 种子):
+    def _second_pass_verify(self, LLM, tag_lines, content, text, 种子):
         """二次优化：把第一次输出与已选 tag 清单逐条核对，缺失补写、冲突/弱化以 tag 为准纠正，完整重写。"""
         system = (
             "你是提示词质检员。把【第一次增强输出】与【已选 tag 清单】逐条核对，按以下规则修订：\n"
@@ -376,7 +446,6 @@ class Prompt_Enhancer:
             f"【已选 tag 清单】\n{checklist}\n\n"
             f"【第一次增强输出】\n{content}\n\n"
             f"【用户提示词原文】\n{text}"
-            + (f"\n\n【场景环境】\n{场景环境}" if 场景环境 else "")
             + "\n\n请逐条核对每个 tag 是否在输出中得到体现：缺失→补写、冲突/弱化→以 tag 为准纠正、已体现→保留。完整重写输出修订后的正文。"
         )
         revised, _usage = llm_utils.call_llm(
