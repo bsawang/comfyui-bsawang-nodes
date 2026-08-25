@@ -4,9 +4,9 @@
 
 > ComfyUI 自定义插件（GitHub：`bsawang/comfyui-bsawang-nodes`）。**本仓库即插件**，clone 到 `ComfyUI\custom_nodes\` 即用（无需 src/ 子目录）。独立 git 仓库内嵌于 aigc-study；**运行副本在 ComfyUI 侧**：`H:\ComfyUI_Windows_portable\ComfyUI\custom_nodes\ComfyUI-bsawang\`（改代码后手动同步到运行副本）。改动日志 `AGENT-LOGGER.md` 在仓库根。
 > 本插件合并原 `H3-API-格式化节点` + `提示词增强器` 两个节点包，统一 CATEGORY「提示词增强器」，右键菜单同组。
-> 📐 **设计文档**：[docs/DESIGN.md](docs/DESIGN.md)（架构 / 5 节点 / Tag 管理器 / 预设系统 / 直出机制 / 踩坑）；数据/制作规约：`docs/PRESET_SPEC.md`（预设）· `docs/BASKET_SPEC.md`（篮子）
+> 📐 **设计文档**：[docs/DESIGN.md](docs/DESIGN.md)（架构 / 7 节点 / Tag 管理器 / 预设系统 / 直出机制 / 踩坑）；数据/制作规约：`docs/PRESET_SPEC.md`（预设）· `docs/BASKET_SPEC.md`（篮子）
 
-## 节点清单（5 个，全部 CATEGORY=提示词增强器）
+## 节点清单（7 个）
 
 | 节点 | 显示名 | 用途 |
 |---|---|---|
@@ -15,6 +15,8 @@
 | Prompt_Enhancer | 提示词增强器 | LLM 连接 + 用户提示词 → 按任务类型/艺术风格增强为完整提示词 |
 | Tag_Reverse | Tag 反推 | 反推文字 + LLM → 结构化 tag 集合 + 扩展建议（逐条采纳），中间节点双输出直出 |
 | Tag_Library | Tag 库编辑 | 三层库管理（tag/篮子/预设）：应用/保存/删除预设、篮子加选项 |
+| Material | 素材封装器 | 图片/文本/视频/音频 + 角色/标签/反推 → 素材对象（透传封装 + 元数据），素材角色含 视频编辑源/底图 |
+| FfmpegVideoPreprocess | ffmpeg视频预处理 | 视频 + fps/尺寸/裁切 → 视频 + 图像 + 音频 + 高度/宽度/FPS/时长/总帧数（ffmpeg+NVENC，秒级重采样/变尺寸/抽帧） |
 
 ## Tag 管理器（Tag_Reverse + Tag_Library + 预设）
 

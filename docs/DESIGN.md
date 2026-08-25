@@ -26,7 +26,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 节点数 | 5（全部 `CATEGORY = bsawang/提示词增强器`）|
+| 节点数 | 7（增强器系列 5 + 素材封装器 + ffmpeg视频预处理）|
 | 技术栈 | Python（urllib，零第三方 HTTP 依赖）+ 前端原生 JS（`addDOMWidget` DOM 面板）|
 | 模型后端 | DeepSeek（Anthropic 兼容）/ GLM / Gemini 等，通过「LLM API 设定器」解耦 |
 | 数据 | `dict.json`（字典骨架）+ `baskets/`（篮子）+ `presets/`（预设）+ `templates/`（system prompt）+ `tasks.json` |
@@ -71,6 +71,8 @@
 | Prompt_Enhancer | 提示词增强器 | `LLM + 用户提示词 + 四栏设置 + 篮子` → `提示词 + 负面提示词` | 核心：预设 tag → 完整提示词 |
 | Tag_Reverse | Tag 反推 | `LLM + 反推文字 + 模板` → `tag集合JSON + 反推结果` | 反推文字 → 结构化 tag 集合 + 建议 |
 | Tag_Library | Tag 库编辑 | `（无数据输入）` → `tag集合JSON` | tag/篮子/预设 三层库管理 |
+| Material | 素材封装器 | `图片/文本/视频/音频 + 角色/标签/反推` → `素材(MATERIAL)` | 真素材 → 素材对象（透传封装 + 元数据）|
+| FfmpegVideoPreprocess | ffmpeg视频预处理 | `视频 + fps + 宽度 + 高度 + 裁切` → `视频 + 图像batch + 长度/高度/宽度/fps/时长/总帧数 + 音频` | 视频加载/重采样/变尺寸/转图像，ffmpeg+NVENC |
 
 ## 4. 共享基础设施
 
@@ -238,6 +240,28 @@
 | 篮子 | 篮子池列表（dict+baskets），展开看 options、加新选项（`POST add_basket_option`）|
 | 预设 | presets 列表：**应用**（覆盖所涉篮子填集合）、**删除**、**保存当前集合为预设** |
 
+### 5.6 FfmpegVideoPreprocess「ffmpeg视频预处理」
+
+> 2026-08-26 新增。覆盖 H3 链路里 `LoadVideo→GetVideoComponents→VideoFrameSample` 整串慢操作（抽帧/变帧率/变尺寸/拆流），直接调 ComfyUI 便携版自带 ffmpeg（NVENC 硬件编码），一 pass 秒级出图。
+
+| widget | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| 视频 | VIDEO（连线）| — | 源视频（LoadVideo 输出）|
+| fps | FLOAT | 0 | 重采样目标 fps；0=保持原帧率 |
+| 宽度 | INT | 0 | 目标宽度；0=保持原宽 |
+| 高度 | INT | 0 | 目标高度；0=保持原高 |
+| 裁切 | combo | crop居中 | 改尺寸方式：crop居中（铺满裁切）/ 等比缩放（留黑边）/ 拉伸（变形）|
+| 图像 | IMAGE（可选）| — | 提供帧时原样透传（不重采样/改尺寸），meta 仍按视频取 |
+
+**输出（8）**：视频(VIDEO) · 图像(IMAGE) · 音频(AUDIO) · 高度(INT) · 宽度(INT) · FPS(FLOAT) · 时长(FLOAT) · 总帧数(INT)
+
+- **总帧数** = 处理后**最终帧数**（= 图像 batch 数，重采样后；非源帧数）
+- **音频** = `{waveform:[1,C,L], sample_rate}`，与 H3 `_encode_ref_audio` 兼容（自动 resample 到 32k）
+
+**实现**：调 `python_standalone/Scripts/ffmpeg.exe`（PATH 兜底），vf 链 `scale→fps/…→format=yuv420p`，`-c:v h264_nvenc`（NVENC 不可用回退 libx264）；PyAV 解码成帧 + 抽音轨。ffmpeg 找不到显式报错。
+
+**H3 接线**：`LoadVideo → ffmpeg视频预处理(fps=24)` → 图像 接 H3 ref_video_1、音频 接 ref_video_audio_1、总帧数 接 H3 length。
+
 ## 6. 预设系统（presets/）
 
 预设 = 跨多个篮子的一组 tag 捆绑（一键填篮子），复杂风格（天宫）用它打包多维度。**完整格式/约束/质检/制作流程见 [`PRESET_SPEC.md`](PRESET_SPEC.md)**，本节只记设计要点：
@@ -371,16 +395,24 @@ Tag_Reverse 执行 → 输出流向 PreviewAny
 - 输出：素材对象（`MATERIAL` 自定义类型）——**透传封装**，数据原样带在对象里，不做内容处理
 - 反推只是标记：仅图片有意义，增强器按此决定是否看图反推
 
-**素材对象**：`{类型, 角色, 标签, 反推, 数据}`；角色选项：内容/风格/角色/构图/动作/环境/音频参考
+**素材对象**：`{类型, 角色, 标签, 反推, 数据}`；角色选项：风格/角色/构图/动作/环境/音频/道具参考 + **视频编辑源**（换人编辑）/ **底图**（图做底）
+
+**⚠️ 素材封装器 wrap 踩坑**（2026-08-25 修复）：`文本` 输入默认 `""` 会被前端每次带上，旧判断 `elif 文本 is not None:` 导致**空文本遮蔽图片/视频/音频**——视频素材永远变成文本。已改为 `文本 is not None and (文本 or "").strip()`（空串不算素材）。测自定义节点须按前端 widget 默认值提交方式测（带 `文本=""`），不能只按后端最小参数。
 
 **增强器（prompt_enhancer.py）**：
-- `参考图` 口移除 → `素材1..素材8` 自增口
+- `参考图` 口移除 → `素材1..素材16` 自增口
 - 消费逻辑：
   - 图片 + 反推=是 → 附加给 LLM 看图反推（多图支持）
   - 图片 + 反推=否 → 仅角色定义（`<标签>` 标记，不处理图像内容）
   - 文本 → 直接注入「角色标签：内容」
-  - 视频/音频 → 按 txt 说明，未提及则不输出
+  - **视频/音频（图生图/图生视频任务）** → 输出 `视频N<标签>：角色` / `音频N<标签>：角色` 定义行（供下游格式化器映射 `<Video N>`/`<Audio N>`）+ 带标签素材行；文生图任务维持「未提及则不输出」
+  - 视频素材行提示独立 `视频角色提示`（视频编辑源/动作参考/音频参考），不与看图提取提示混用
 - 角色标签 = 生成模型里的 `<标签>` 参考匹配标记
+- **视频编辑源场景**：增强器跳过时间轴/分镜增强与结构指令（分段标题保留 [主体] 等块结构但无 [时间轴]；连贯一段纯段落），模板「视频编辑源」节约束不虚构源视频画面细节、环境沿源视频
+
+**视频编辑源 / 底图 角色 → H3 语义**（模板「素材角色→H3语义映射」段）：
+- **视频编辑源（换人）**：格式化器 summary 用 `[video editing]` + `The target video is an edited version of <Video N>.`；retention 视频 fully_preserved / 人物 attribute_transfer / 音频 fully_copy（`<Audio N>` 需进 subject_definitions）；detailed_description 不铺陈源视频画面细节、不分镜
+- **底图（图做底）**：一张 `<Picture N>` 定义多个 `<Subject N>`（人物+环境+风格）；视频作动作源 → `[reference generation]` + 动作 attribute_transfer（非 weak_reference）
 
 **视频流程模板（增强器系统提示词按流程切换）**：
 - `templates/参考生视频.txt`（H3 Ref2VA）：动作参考文字为骨架 + `<夭夭>` 标签沿用 + 外观禁写 + 视频维度三层 + 对白如实输出 + 声音线索
