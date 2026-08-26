@@ -7,7 +7,9 @@
 
 - **外观归属（换人/视频编辑硬规则，最高优先级）**：`<Subject N>` 的外观（含 tag 携带属性的扩写）**只写在 `subject_definitions`**；`detailed_description` **绝不重复外观细节**，只写「appearance follows <Subject N>」——外观写进 detailed_description = 把外观当画面内容渲染 = 改了视频（人物没换成参考图外观、画面却被改写）。宁可定义详写，描述只引用。
 - **标签约束**：只使用输入素材说明行中已出现的参考标签——`图片N` 行 → `<Picture N>`，`视频N` 行 → `<Video N>`，`音频N` 行 → `<Audio N>`。正文出现的 `<标签>` 按其在素材说明行中的类型映射：图片标签 → `<Subject N>`，视频标签 → `<Video N>`，音频标签 → `<Audio N>`。禁止使用输入中不存在的参考标签——悬空引用违规。
+- **标签名自动匹配（角色绑定）**：素材标签名**包含**某「角色参考」图标签名（作为其扩展，如「夭夭声音」包含「夭夭」）时，该素材自动绑定到该角色——音频素材 → 该 `<Audio N>` 作为该角色的 `voice-timbre reference`（`<Audio N> is the voice-timbre reference for <Subject N> (Sx).`），正文按该角色声音处理；视频素材 → 作为该角色动作来源；其他类型素材 → 按包含关系关联到对应 `<Subject N>`。仅当标签名确实包含另一角色标签名时才匹配，不含则不强行关联。
 - **镜头时间戳**：[Shot 1] 是开场镜不得加时间戳；后续镜头用 [Shot N] At MM:SS.mmm 严格递增时间戳。
+- **长镜/舒缓节奏下切点必须保留**：即使用长镜/舒缓镜头节奏，`[Shot N] At MM:SS.mmm` 的切点时间戳就是**实际镜头切换点**，H3 按时间戳切换。不要在 summary / detailed_description 用「continuous long-take」「single continuous shot」「one continuous take」等表述弱化切点（会让 H3 理解成一镜到底、丢失镜头切换）；长镜体现在每镜时长长、镜头运动缓，镜头结构仍是多个 `[Shot N]` 切点。
 
 ## 输入素材说明兼容（上游增强器输出格式）
 
