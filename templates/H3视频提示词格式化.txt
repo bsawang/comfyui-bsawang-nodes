@@ -5,19 +5,19 @@
 
 ## 工作流附加约束（通用，所有模式生效）
 
-- **参考换人场景**：<Picture N> 只作标签引用，禁止编造或描述其外观（面容/发型/发色/服装/体型等一律不写），外观由后续参考图提供。
+- **外观归属（换人/视频编辑硬规则，最高优先级）**：`<Subject N>` 的外观（含 tag 携带属性的扩写）**只写在 `subject_definitions`**；`detailed_description` **绝不重复外观细节**，只写「appearance follows <Subject N>」——外观写进 detailed_description = 把外观当画面内容渲染 = 改了视频（人物没换成参考图外观、画面却被改写）。宁可定义详写，描述只引用。
 - **标签约束**：只使用输入素材说明行中已出现的参考标签——`图片N` 行 → `<Picture N>`，`视频N` 行 → `<Video N>`，`音频N` 行 → `<Audio N>`。正文出现的 `<标签>` 按其在素材说明行中的类型映射：图片标签 → `<Subject N>`，视频标签 → `<Video N>`，音频标签 → `<Audio N>`。禁止使用输入中不存在的参考标签——悬空引用违规。
 - **镜头时间戳**：[Shot 1] 是开场镜不得加时间戳；后续镜头用 [Shot N] At MM:SS.mmm 严格递增时间戳。
 
 ## 输入素材说明兼容（上游增强器输出格式）
 
-输入可能带「素材说明」行，形如：`图片1<夭夭>：角色参考`、`视频1<跳舞>：视频编辑源`、`图片2<雪地>：底图`、`音频1<BGM>：音频参考`。
+输入可能带「素材说明」行，形如：`图片1<角色标签>：角色参考`、`视频1<视频标签>：视频编辑源`、`图片2<环境标签>：底图`、`音频1<音频标签>：音频参考`。
 
 1. **识别**：形如 `图片N<标签>：角色` / `视频N<标签>：角色` / `音频N<标签>：角色` 的行是上游素材说明，不是 H3 提示词正文。
 2. **标号转换（必填）**：素材说明中的标签**按类型与序号映射为对应参考标签**：
-   - 图片标签：`图片N<标签>` → `<Picture N>`（来源定义），正文同名 `<标签>` → `<Subject N>`（例：`图片1<夭夭>` → `<Picture 1>`，正文 `<夭夭>` → `<Subject 1>`）
-   - 视频标签：`视频N<标签>` → `<Video N>`，正文引用该视频时用 `<Video N>`（例：`视频1<跳舞>` → `<Video 1>`）
-   - 音频标签：`音频N<标签>` → `<Audio N>`，正文引用该音频时用 `<Audio 1>`（例：`音频1<BGM>` → `<Audio 1>`）
+   - 图片标签：`图片N<标签>` → `<Picture N>`（来源定义），正文同名 `<标签>` → `<Subject N>`（例：`图片1<角色标签>` → `<Picture 1>`，正文 `<角色标签>` → `<Subject 1>`）
+   - 视频标签：`视频N<标签>` → `<Video N>`，正文引用该视频时用 `<Video N>`（例：`视频1<视频标签>` → `<Video 1>`）
+   - 音频标签：`音频N<标签>` → `<Audio N>`，正文引用该音频时用 `<Audio 1>`（例：`音频1<音频标签>` → `<Audio 1>`）
    - `<Picture N>` 仅作来源定义，正文一律用 `<Subject N>`（角色/环境/风格同属可见内容，subject 化）
 3. **不输出素材说明**：六段式正文中不出现 `图片N<…>`、`视频N<…>`、`音频N<…>` 等素材行/编号；
    只在 `subject_definitions` 中用 `<Subject N> ... comes from <Picture N>` 定义可见来源；`<Video N>` / `<Audio N>` 在正文 / `retention_analysis` 中自然引用。
@@ -29,9 +29,10 @@
 
 - **视频编辑源（换人）**：
   - summary 任务类型用 `[video editing]`，前缀后写 `The target video is an edited version of <Video N>.`
-  - **音频**：默认沿用源视频音轨 → summary 加 `audio reuse`，**在 subject_definitions 定义 `<Audio N>`**（如 `<Audio N> is the original soundtrack of <Video N>, copied 1:1 as the target's final audio track.`），retention_analysis 用 `fully_copy`；`overall_soundscape` / `non_diegetic_music` 写「preserved from <Video N>」，**不虚构具体声音元素**。用户明确要求不使用源视频音频时，**不加 `audio reuse`、不建 `<Audio N>`**，`overall_soundscape` / `non_diegetic_music` 写全新音轨（音轨被替换/新生成）
+  - **音频**：默认沿用源视频音轨 → summary 加 `audio reuse`，**在 subject_definitions 定义 `<Audio N>`**（说明它是源视频音轨、1:1 复制为最终音轨），retention_analysis 用 `fully_copy`；`overall_soundscape` / `non_diegetic_music` 写「preserved from <Video N>」，**不虚构具体声音元素**。用户明确要求不使用源视频音频时，**不加 `audio reuse`、不建 `<Audio N>`**，`overall_soundscape` / `non_diegetic_music` 写全新音轨（音轨被替换/新生成）
   - retention_analysis：`<Video N>` 的动作/场景/机位/节奏 → `fully_preserved`；人物 → `attribute_transfer`（外观来自对应 `<Picture N>` 的新主体）
-  - detailed_description：以源视频画面为骨描述编辑后结果，人物用 `<Subject N>`，禁编造源视频没有的环境/情节；**不铺陈源视频画面细节**（不写具体镜头运动/景别变化/光线/色彩/背景元素，如「wide to medium shot」「推拉摇移」——这些由 `<Video N>` 直接提供）；**镜头结构沿源视频，不自行创作 `[Shot N]` 分镜/时间戳**（可整段或单镜描述，节奏由 `<Video N>` 提供）
+  - **外观归属（关键）**：`<Subject N>` 的外观（面容/身体/服装）来自 `<Picture N>`（角色参考）+ tag 修改；**body/clothing 属于 `<Subject N>`，绝不归 `<Video N>`**（`<Video N>` 只提供动作/场景/机位/节奏/人物原有动作）。输入若带 `<Subject N>` 外观属性，并入 `subject_definitions` 的 `<Subject N>` 定义；`detailed_description` **不重复描述外观**，只写「appearance follows `<Subject N>`」——详细描述重复外观 = 把外观写进画面内容 = 直接改视频（人物没换成参考图外观、画面却被改写）
+  - detailed_description：以源视频画面为骨描述编辑后结果，人物用 `<Subject N>`，禁编造源视频没有的环境/情节；**不铺陈源视频画面细节**（不写具体镜头运动/景别变化/光线/色彩/背景元素——这些由 `<Video N>` 直接提供）；**不写 `[Shot N]` 标记（包括 [Shot 1]）**，用整段描述，并明确写「The shot structure, cut points, and pacing follow `<Video N>` exactly, with no added shots or timing changes.」——避免写 [Shot 1] 暗示单镜头导致 H3 不保留源视频多镜头结构
 - **底图（图做底）**：
   - 一张 `<Picture N>` 可定义多个 `<Subject N>`（人物 + 环境 + 风格），subject_definitions 分别列出
   - 视频作动作源：summary 用 `[reference generation]`，retention_analysis 视频动作 → `attribute_transfer`（完全转移，非 weak_reference）

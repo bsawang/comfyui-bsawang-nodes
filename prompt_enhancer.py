@@ -33,8 +33,8 @@ def _load_tasks() -> dict:
 
 TASKS = _load_tasks()
 
-# 图生图类任务：需强制接图片素材（源图锚点）
-IMAGE_TASKS = {"图生图(I2I)", "图生视频(I2V)"}
+# 图生图类任务：素材进定义行 + 行内联标记（参考匹配）
+IMAGE_TASKS = {"图生图(I2I)", "参考生视频"}
 
 # 角色提取边界（角色隔离）：每个角色反推时只看图提取对应维度，不透全图/不越界
 角色提取提示 = {
@@ -74,6 +74,20 @@ def _load_default_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = _load_default_system_prompt()
+
+# 任务类型 → 系统提示词模板（内置自动切换；系统提示词文件 widget 留空时按此选）
+任务模板 = {
+    "文生图(T2I)": "常规文生图.txt",
+    "图生图(I2I)": "常规文生图.txt",
+    "文生视频(T2V)": "文生视频.txt",
+    "参考生视频": "参考生视频.txt",
+}
+
+
+def _auto_system_prompt(任务类型: str) -> str:
+    """按任务类型自动选系统提示词文件；未知类型回落 常规文生图。"""
+    tpl = 任务模板.get(任务类型, "常规文生图.txt")
+    return str(NODE_DIR / "templates" / tpl)
 
 
 def _read_system_prompt(path_str: str) -> str:
@@ -170,7 +184,7 @@ class Prompt_Enhancer:
     @classmethod
     def INPUT_TYPES(cls):
         required = {"LLM": ("LLM_CONFIG", {"tooltip": "接「LLM API 设定器」输出的 LLM 连接"})}
-        # 从外部字典动态构建各栏 widget；系统提示词文件为固定控制项
+        # 从外部字典动态构建各栏 widget；系统提示词已内置（按任务类型自动选模板）
         # basket 字段不生成原生 widget（前端 splice，避免占空间），meta 打进 bsawang.basketMeta 供前端渲染
         # meta.tasks = 篮子 condition 推导的适用任务类型列表（无 condition = 全部任务），前端据此显隐 tab
         basket_meta = {}
@@ -197,10 +211,6 @@ class Prompt_Enhancer:
             },
         )
         required["二次优化"] = (["否", "是"], {"default": "否", "tooltip": "开：第二次调用 LLM，把第一次输出与已选 tag 逐条核对——缺失补写、冲突/弱化以 tag 为准纠正，完整重写输出（多一次 LLM 调用）"})
-        required["系统提示词文件"] = (
-            "STRING",
-            {"default": str(NODE_DIR / "templates" / "常规文生图.txt"), "tooltip": "增强规则 system prompt；文件缺失/读取失败时回落内置默认"},
-        )
         optional = {}
         for i in range(1, 17):
             optional[f"素材{i}"] = (
@@ -214,7 +224,7 @@ class Prompt_Enhancer:
     FUNCTION = "enhance"
     CATEGORY = "bsawang/提示词增强器"
 
-    def enhance(self, LLM, 用户提示词, 系统提示词文件, **kw):
+    def enhance(self, LLM, 用户提示词, **kw):
         text = (用户提示词 or "").strip()
         # 用户提示词作为补充说明（主体/场景等细节，素材已定义的由素材提供）；素材驱动时可空
 
@@ -237,9 +247,18 @@ class Prompt_Enhancer:
         # 用户提示词与素材都空 → 无事可做；有素材则继续（素材驱动，用户提示词仅补充）
         if not text and not 素材列表:
             return ("", "")
-        # 图生图/图生视频：强制接图片素材（源图锚点）
-        if is_image_task and not any(m.get("类型") == "图片" for m in 素材列表):
-            raise ValueError("[提示词增强器] 图生图/图生视频需要接图片素材：请用「素材封装器」接图片（角色可设内容/角色参考，反推按需）")
+        # 素材自检：角色↔类型一致性（特殊模式前置校验）
+        for m in 素材列表:
+            if m.get("角色") == "视频编辑源" and m.get("类型") != "视频":
+                raise ValueError(f"[提示词增强器] 素材自检失败：角色「视频编辑源」必须接视频素材，当前是「{m.get('类型')}」")
+            if m.get("角色") == "底图" and m.get("类型") != "图片":
+                raise ValueError(f"[提示词增强器] 素材自检失败：角色「底图」必须接图片素材，当前是「{m.get('类型')}」")
+        # 图生图：强制接图片素材（源图锚点）
+        if 任务类型 == "图生图(I2I)" and not any(m.get("类型") == "图片" for m in 素材列表):
+            raise ValueError("[提示词增强器] 图生图需要接图片素材（源图锚点）：请用「素材封装器」接图片")
+        # 参考生视频：至少一个参考素材（图片/视频/音频任一）
+        if 任务类型 == "参考生视频" and not 素材列表:
+            raise ValueError("[提示词增强器] 参考生视频需要至少一个参考素材（图片/视频/音频任一）：请用「素材封装器」接素材")
         素材行 = []
         素材定义输出 = []
         附加图片 = []
@@ -281,7 +300,7 @@ class Prompt_Enhancer:
             elif t in ("视频", "音频"):
                 类型名 = "视频" if t == "视频" else "音频"
                 if is_image_task:
-                    # 图生视频/图生图：视频/音频素材带标签进素材定义输出，供下游格式化器映射 <Video N>/<Audio N>
+                    # 图生图/参考生视频：视频/音频素材带标签进素材定义输出，供下游格式化器映射 <Video N>/<Audio N>
                     if t == "视频":
                         视频编号 += 1
                         编号 = 视频编号
@@ -293,7 +312,8 @@ class Prompt_Enhancer:
                 else:
                     素材行.append(f"【素材·{role}】：{t}素材（按素材使用说明，未提及则不输出）")
 
-        system_prompt = _read_system_prompt(系统提示词文件)
+        # 系统提示词内置：按任务类型自动选模板（widget 已删除）
+        system_prompt = _read_system_prompt(_auto_system_prompt(任务类型))
 
         # 任务类型行（前置提示词按任务区分：图生图源图为内容基础、按素材角色提取、可修改）
         if is_image_task:

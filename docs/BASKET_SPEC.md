@@ -45,7 +45,7 @@
     ["烛光", "霓虹光"]
   ],
   "condition": {
-    "任务类型": ["文生视频(T2V)", "图生视频(I2V)"]
+    "任务类型": ["文生视频(T2V)", "参考生视频"]
   }
 }
 ```
@@ -82,7 +82,7 @@
 - 篮子**无 `label` 字段**（key=label 单一模型）；`key` 即文件名/显示名/传 LLM 的维度名
 - 新增篮子走 `save_basket` 的 `create: true`，`key` 已存在则报错（重复检测）；重命名走 `rename_basket`（改 key + 文件名 + 迁移预设引用）
 - `mutually_exclusive: true` 时**不要**再配 `conflicts`（互斥已保证单值，conflicts 冗余）
-- `condition.任务类型` 只能是四类之一：`文生图(T2I)` / `图生图(I2I)` / `文生视频(T2V)` / `图生视频(I2V)`
+- `condition.任务类型` 只能是四类之一：`文生图(T2I)` / `图生图(I2I)` / `文生视频(T2V)` / `参考生视频`
 - 同一 `section` 的文件，`section_title` 必须一致
 - 同 section 内按 `order` 升序排列（缺省 0）
 

@@ -43,6 +43,20 @@ def _temp_mp4() -> str:
     return path
 
 
+def _resolve_video_path(video) -> str:
+    """把 VIDEO 输入解析为文件路径：BytesIO 先落临时文件（ffmpeg 只认路径）。"""
+    src = video.get_stream_source()
+    if isinstance(src, str):
+        return src
+    # BytesIO → 临时文件
+    fd, path = tempfile.mkstemp(suffix=".mp4", prefix="ffmpeg_vid_src_")
+    os.close(fd)
+    with open(path, "wb") as f:
+        src.seek(0)
+        f.write(src.read())
+    return path
+
+
 def _decode_video_to_tensor(path: str, max_frames: int | None = None) -> torch.Tensor:
     """PyAV 解码视频 → IMAGE tensor [B,H,W,C]（float 0-1）。"""
     import av
@@ -144,7 +158,7 @@ class FfmpegVideoPreprocess:
     CATEGORY = "bsawang/视频"
 
     def process(self, 视频, fps, 宽度, 高度, 裁切, 图像=None):
-        src = str(视频.get_stream_source())
+        src = _resolve_video_path(视频)
         src_fps = float(视频.get_frame_rate())
 
         if 图像 is not None:
@@ -177,5 +191,123 @@ class FfmpegVideoPreprocess:
         return (out_video, images, audio, height, width, out_fps, duration, frames)
 
 
-NODE_CLASS_MAPPINGS = {"FfmpegVideoPreprocess": FfmpegVideoPreprocess}
-NODE_DISPLAY_NAME_MAPPINGS = {"FfmpegVideoPreprocess": "ffmpeg视频预处理"}
+class VideoCompare:
+    """视频对比节点：两个视频 并排/上下 合成对比视频 + 帧序列。
+
+    用 ffmpeg hstack/vstack，高度统一（取较小高度或指定），宽度按比例自动。
+    输出：对比视频(VIDEO) + 帧序列(IMAGE) + 帧数 + fps，可接 SaveVideo 或预览。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "视频1": ("VIDEO", {"tooltip": "第一个视频（如源参考）"}),
+                "视频2": ("VIDEO", {"tooltip": "第二个视频（如生成结果）"}),
+                "模式": (["并排", "上下"], {"default": "并排", "tooltip": "对比排布：并排=左右，上下=垂直"}),
+                "高度": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 2,
+                                 "tooltip": "并排时的统一高度 / 上下时的统一宽度；0=取较小值"}),
+                "fps": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 120.0, "step": 0.001,
+                                  "tooltip": "统一 fps（两个输入先归一化再对比）；0=取视频1的 fps"}),
+            }
+        }
+
+    RETURN_TYPES = ("VIDEO", "IMAGE", "INT", "FLOAT")
+    RETURN_NAMES = ("对比视频", "帧序列", "帧数", "fps")
+    FUNCTION = "compare"
+    CATEGORY = "bsawang/视频"
+
+    def compare(self, 视频1, 视频2, 模式, 高度, fps):
+        src1 = _resolve_video_path(视频1)
+        src2 = _resolve_video_path(视频2)
+        w1, h1 = 视频1.get_dimensions()
+        w2, h2 = 视频2.get_dimensions()
+
+        # fps 归一化：两个输入统一到 target_fps（0=取视频1 fps），避免 hstack 不同步
+        f1 = float(视频1.get_frame_rate())
+        target_fps = fps if fps > 0 else f1
+        fps_filter = f"fps={target_fps},"
+
+        if 模式 == "并排":
+            target = 高度 if 高度 > 0 else min(h1, h2)
+            target = max(2, target - target % 2)
+            vf = (f"[0:v]{fps_filter}scale=-2:{target}[a];"
+                  f"[1:v]{fps_filter}scale=-2:{target}[b];"
+                  f"[a][b]hstack=2[out]")
+        else:  # 上下
+            target = 高度 if 高度 > 0 else min(w1, w2)
+            target = max(2, target - target % 2)
+            vf = (f"[0:v]{fps_filter}scale={target}:-2[a];"
+                  f"[1:v]{fps_filter}scale={target}:-2[b];"
+                  f"[a][b]vstack=2[out]")
+
+        out_path = _temp_mp4()
+        ffmpeg = _find_ffmpeg()
+        cmd = [ffmpeg, "-y", "-i", src1, "-i", src2, "-filter_complex", vf,
+               "-map", "[out]", "-map", "0:a:0?",
+               "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "23",
+               "-c:a", "aac", "-shortest", "-movflags", "+faststart", out_path]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            cmd[cmd.index("-c:v") + 1] = "libx264"
+            subprocess.run(cmd, check=True, capture_output=True)
+
+        out_video = VideoFromFile(out_path)
+        images = _decode_video_to_tensor(out_path)
+        fps = float(out_video.get_frame_rate())
+        return (out_video, images, int(images.shape[0]), fps)
+
+
+class VideoPreview:
+    """视频预览节点：只查看、不落 output 目录。
+
+    把输入视频拷贝到 ComfyUI temp 目录，前端以「images + animated」播放（PreviewVideo 机制）。
+    输出原视频（透传）。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "视频": ("VIDEO", {"tooltip": "要预览的视频"}),
+            }
+        }
+
+    RETURN_TYPES = ("VIDEO",)
+    RETURN_NAMES = ("视频",)
+    FUNCTION = "preview"
+    OUTPUT_NODE = True
+    CATEGORY = "bsawang/视频"
+
+    def preview(self, 视频):
+        import os
+        import shutil
+
+        src = _resolve_video_path(视频)
+        try:
+            import folder_paths
+            temp_dir = folder_paths.get_temp_directory()
+        except Exception:
+            temp_dir = tempfile.gettempdir()
+        name = os.path.basename(src)
+        dst = os.path.join(temp_dir, name)
+        if not os.path.abspath(src) == os.path.abspath(dst):
+            if not os.path.exists(dst):
+                shutil.copy2(src, dst)
+        return {
+            "ui": {"images": [{"filename": name, "subfolder": "", "type": "temp"}], "animated": (True,)},
+            "result": (视频,),
+        }
+
+
+NODE_CLASS_MAPPINGS = {
+    "FfmpegVideoPreprocess": FfmpegVideoPreprocess,
+    "VideoCompare": VideoCompare,
+    "VideoPreview": VideoPreview,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "FfmpegVideoPreprocess": "ffmpeg视频预处理",
+    "VideoCompare": "视频对比",
+    "VideoPreview": "视频预览",
+}

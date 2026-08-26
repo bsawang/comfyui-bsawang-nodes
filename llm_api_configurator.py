@@ -55,6 +55,20 @@ class LLM_API_Configurator:
                         "tooltip": "该 LLM 是否支持图片输入（视觉模型选「是」；纯文本模型选「否」）。增强器接图时以此判断是否传图",
                     },
                 ),
+                "支持视频": (
+                    ["否", "是"],
+                    {
+                        "default": "否",
+                        "tooltip": "该 LLM 是否支持视频输入（多模态视频模型选「是」）。增强器接视频素材反推时以此判断是否取帧传图；模型报错自动兜底",
+                    },
+                ),
+                "支持音频": (
+                    ["否", "是"],
+                    {
+                        "default": "否",
+                        "tooltip": "该 LLM 是否支持音频输入。增强器接音频素材反推时以此判断",
+                    },
+                ),
             }
         }
 
@@ -63,7 +77,7 @@ class LLM_API_Configurator:
     FUNCTION = "create"
     CATEGORY = "bsawang/提示词增强器"
 
-    def create(self, 接口格式, 模型, API基础URL, APIKey环境变量, 温度, 最大token, 支持视觉):
+    def create(self, 接口格式, 模型, API基础URL, APIKey环境变量, 温度, 最大token, 支持视觉, 支持视频, 支持音频):
         api_key_env = (APIKey环境变量 or "").strip() or "ANTHROPIC_AUTH_TOKEN"
         # 设定时验证 key 环境变量存在（提前暴露配置错误，不等到下游调用才报）
         api_key = os.environ.get(api_key_env) or os.environ.get("ANTHROPIC_AUTH_TOKEN")
@@ -80,6 +94,8 @@ class LLM_API_Configurator:
             "温度": 温度,
             "最大token": 最大token,
             "支持视觉": 支持视觉 == "是",
+            "支持视频": 支持视频 == "是",
+            "支持音频": 支持音频 == "是",
         }
         if not cfg["模型"]:
             raise ValueError("[LLM设定器] 模型为空：请在 widget 里填写模型名。")
