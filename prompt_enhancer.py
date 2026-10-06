@@ -351,7 +351,7 @@ class Prompt_Enhancer:
                         if _g and _g not in _seen:
                             _seen.add(_g)
                             injected.append(_g)
-                    # 按选中 tag 注入对应行（主题风格/艺术风格特点词表等）
+                    # 按选中 tag 注入对应行（主题风格/绘画风格/视觉调性特点词表等）
                     for _tag in basket_tags[_f["key"]]:
                         _row = (_f.get("option_guidance") or {}).get(_tag)
                         if _row and _row not in _seen:
@@ -385,8 +385,12 @@ class Prompt_Enhancer:
                     if not tags:
                         continue  # 空篮子不传（篮子空 = 该维度不约束）
                     line = f"{label}：{'、'.join(tags)}"
-                    if key == "艺术风格":
-                        line += "（强约束：输出必须体现所选风格的核心视觉特征，按注入的风格特点词配 2-3 个视觉特点词，不得退化为写实）"
+                    if key == "绘画风格":
+                        line += "（强约束：输出必须体现所选画法的核心视觉特征，按注入的风格特点词配 2-3 个视觉特点词，不得退化为写实）"
+                    elif key == "视觉调性":
+                        line += "（强约束：输出必须体现所选调性的核心特征，按注入的特点词配 2-3 个，不得退化为无调性的平铺直叙）"
+                    elif key == "主题风格":
+                        line += "（强约束：输出必须体现所选题材的标志性场景/道具/氛围元素，按注入的词表选 2-3 个融入，不得写成无题材特征的通用场景）"
                     tag_lines.append(line)
                 else:
                     val = kw.get(key, "")

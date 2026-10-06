@@ -1,0 +1,56 @@
+{
+  "key": "绘画风格",
+  "section": "content",
+  "type": "basket",
+  "order": 2,
+  "guidance": [
+    "**绘画风格** = 画法/媒介，决定「**用什么画**」——**互斥：只能选一个主画法**（油画与水彩不能共存）。",
+    "**必须配 2-3 个该风格的特点词锁定输出**（单写风格名会被模型平均化/忽略）；用户明确选了时是**强约束**，输出必须体现该画法的核心视觉特征，不得退化为写实。",
+    "需要叠加影调/题材倾向（电影感/悬疑犯罪…）时用「视觉调性」篮子，不在此重复选择。"
+  ],
+  "option_guidance": {
+    "超写实(photorealistic)": "超写实(photorealistic)：真实照片质感、自然皮肤纹理、物理正确光影、浅景深、镜头光晕",
+    "油画(oil painting)": "油画(oil painting)：可见笔触、厚涂肌理、深饱和、画布质感",
+    "水彩(watercolor)": "水彩(watercolor)：透明水洗、软边晕染、纸张纹理、留白高光",
+    "水墨(ink wash)": "水墨(ink wash)：墨色浓淡渐变、留白、流畅笔意、宣纸纹理、东方写意",
+    "浮世绘(ukiyo-e)": "浮世绘(ukiyo-e)：平涂色块、粗黑轮廓、木刻纹理、和风配色（靛蓝/朱红）",
+    "日式动画(anime)": "日式动画(anime)：干净线稿、赛璐璐上色、大而传神的眼睛、动态构图",
+    "赛璐璐(cel shading)": "赛璐璐(cel shading)：平涂色块、硬边阴影、2D 平面感、无渐变",
+    "漫画(comic book)": "漫画(comic book)：粗墨线、半调网点、动态分镜、高饱和原色",
+    "3D渲染(3D render)": "3D渲染(3D render)：次表面散射、环境光遮蔽、真实材质、工作室布光",
+    "像素风(pixel art)": "像素风(pixel art)：可见像素块、点阵纹理、低分辨率网格、8-bit/16-bit 复古、限色调板、锯齿边缘",
+    "黑白素描": "黑白素描：铅笔/炭笔素描质感，线条与明暗塑造，无彩色。",
+    "数字绘画(digital painting)": "数字绘画(digital painting)：数字板绘质感，笔触干净、色彩明快、光影扎实。",
+    "二次元插画": "二次元插画：日系动漫插画质感，干净线稿、鲜明配色、大眼睛精致角色。"
+  },
+  "options": [
+    "超写实(photorealistic)",
+    "油画(oil painting)",
+    "水彩(watercolor)",
+    "水墨(ink wash)",
+    "浮世绘(ukiyo-e)",
+    "日式动画(anime)",
+    "赛璐璐(cel shading)",
+    "漫画(comic book)",
+    "3D渲染(3D render)",
+    "像素风(pixel art)",
+    "黑白素描",
+    "数字绘画(digital painting)",
+    "二次元插画"
+  ],
+  "mutually_exclusive": true,
+  "conflicts": [
+    [
+      "超写实(photorealistic)",
+      "水墨(ink wash)"
+    ],
+    [
+      "超写实(photorealistic)",
+      "油画(oil painting)"
+    ],
+    [
+      "超写实(photorealistic)",
+      "浮世绘(ukiyo-e)"
+    ]
+  ]
+}
