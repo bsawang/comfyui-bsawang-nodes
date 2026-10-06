@@ -50,7 +50,7 @@
 }
 ```
 
-> 完整参考：`baskets/主题风格.json`（guidance 强约束 + option_guidance 题材词表）、`baskets/艺术风格.json`（同上）、本地补充篮子（guidance 维度规则 + gate 跨字段）。
+> 完整参考：`baskets/主题风格.json`（guidance 强约束 + option_guidance 题材词表）、`baskets/绘画风格.json`（同上）、本地补充篮子（guidance 维度规则 + gate 跨字段）。
 
 ### 字段表
 
@@ -67,7 +67,7 @@
 | `order` | | 同 section 内排序（升序，缺省 0）；控制篮子在前端 tab 行的位置 |
 | `gate` | | 跨字段前置：本篮子有值时必须先选 `gate` 指定的篮子 key（该 key 未选则报错）|
 | `guidance` | | 系统提示词补充：本篮子被选中时注入 system prompt 的规则行（字符串数组，按选中篮子去重注入）|
-| `option_guidance` | | 按选项注入：`{选项: 规则行}`，本篮子被选中时，只注入**已选选项**对应的行（主题风格/艺术风格特点词表用）|
+| `option_guidance` | | 按选项注入：`{选项: 规则行}`，本篮子被选中时，只注入**已选选项**对应的行（主题风格/绘画风格/视觉调性特点词表用）|
 
 ### 注入机制（guidance / option_guidance）
 
