@@ -113,7 +113,7 @@ function createPanel(node, nodeData) {
     }
 
     const root = make("div", {
-        position: "relative", width: `${PANEL_WIDTH}px`, maxWidth: "100%",
+        position: "relative", width: "100%", maxWidth: "100%",
         boxSizing: "border-box", color: "#d7e3ef", fontFamily: "Arial,sans-serif",
         fontSize: "12px", userSelect: "none", padding: "8px", overflow: "visible",
         border: "1px solid #2d4255", borderRadius: "8px", background: "#101b26",
@@ -489,10 +489,13 @@ function createPanel(node, nodeData) {
     const baseComputeSize = node.computeSize.bind(node);
     node.computeSize = function (out) {
         const measured = baseComputeSize(out);
-        measured[0] = PANEL_WIDTH;
+        // 面板自适应节点宽度：不低于默认宽（PANEL_WIDTH），用户拖宽节点时面板随之拉伸
+        measured[0] = Math.max(node.size?.[0] || 0, measured[0] || 0, PANEL_WIDTH);
         const visible = activeIdx === 0 ? presetView : basketEls[activeIdx - 1];
         const chipCount = visible ? visible.querySelectorAll(".bsa-chip").length : 0;
-        const rows = Math.max(1, Math.ceil(chipCount / 6));
+        // 每行 chip 数随面板宽度缩放（约 83px/chip，与默认 6/500 一致）
+        const perRow = Math.max(3, Math.round(measured[0] / 83));
+        const rows = Math.max(1, Math.ceil(chipCount / perRow));
         measured[1] = Math.max(measured[1] || 0, 30 + rows * 22 + 34);
         return measured;
     };
