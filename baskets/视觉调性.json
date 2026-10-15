@@ -12,13 +12,51 @@
     "电影感(cinematic)": "电影感(cinematic)：浅景深、戏剧性光比、电影调色（teal-orange）、宽画幅、胶片颗粒",
     "胶片感(analog film)": "胶片感(analog film)：胶片颗粒、暖色调偏、高光柔和、微降饱和、复古年代感",
     "概念设计(concept art)": "概念设计(concept art)：氛围感、材质细节、光影塑造、ArtStation 风格",
-    "蒸汽波": "蒸汽波：粉青渐变、希腊雕像、网格地面、CRT 扫描线、90 年代商场、棕榈剪影"
+    "蒸汽波": "蒸汽波：粉青渐变、希腊雕像、网格地面、CRT 扫描线、90 年代商场、棕榈剪影",
+    "构成主义(constructivism)": "构成主义(constructivism)：几何抽象构成、倾斜对角线动势、红黑白工业原色、粗体无衬线排版、宣传海报式构图",
+    "极简主义(minimalism)": "极简主义(minimalism)：大留白、限配色、简洁几何形体、去装饰",
+    "极繁主义(maximalism)": "极繁主义(maximalism)：元素密集堆砌、高饱和撞色、繁复层叠纹样、满幅构图、视觉过载",
+    "新古典主义(neo-classicism)": "新古典主义(neo-classicism)：庄重对称构图、光滑细腻肌理、古典雕塑与建筑母题、典雅克制配色",
+    "粗野主义(brutalism)": "粗野主义(brutalism)：清水混凝土、粗粝裸露结构、巨型几何块体、重复模数、冷峻灰调",
+    "包豪斯(bauhaus)": "包豪斯(bauhaus)：几何抽象、红黄蓝三原色加黑白、功能主义网格排版、钢管工业设计感",
+    "装饰艺术(art deco)": "装饰艺术(art deco)：对称放射几何、黑金奢华配色、阶梯状轮廓、爵士时代装饰纹样",
+    "孟菲斯设计(memphis design)": "孟菲斯设计(memphis design)：80 年代撞色、波点波浪几何纹样、玩味不对称、糖果色",
+    "波普艺术(pop art)": "波普艺术(pop art)：高饱和原色、半调网点、商业符号并置、丝网印刷质感、粗轮廓",
+    "欧普艺术(op art)": "欧普艺术(op art)：黑白几何视错觉、重复线条网格、摩尔纹、闪烁运动幻觉",
+    "抽象表现主义(abstract expressionism)": "抽象表现主义(abstract expressionism)：自发滴洒笔触、动作绘画痕迹、非具象大画幅、强烈情绪能量",
+    "稚拙艺术(naive art)": "稚拙艺术(naive art)：朴素无透视、儿童画般造型、鲜艳平涂色、民间天真感",
+    "迷幻艺术(psychedelic art)": "迷幻艺术(psychedelic art)：高饱和漩涡色彩、流动扭曲纹样、融化光晕、60 年代海报感",
+    "故障艺术(glitch art)": "故障艺术(glitch art)：像素错位、RGB 色差分离、数据损坏条纹、信号噪点、画面撕裂",
+    "Y2K千禧美学(y2k aesthetic)": "Y2K千禧美学(y2k aesthetic)：金属镀铬与透明果冻材质、冰蓝银色、蓬松光泽、千禧电子消费品",
+    "梦核美学(dreamcore)": "梦核美学(dreamcore)：阈限空间、怀旧柔光、空荡泳池走廊地毯、低清梦幻颗粒、熟悉又陌生"
   },
   "options": [
     "电影感(cinematic)",
     "胶片感(analog film)",
     "概念设计(concept art)",
-    "蒸汽波"
+    "蒸汽波",
+    "构成主义(constructivism)",
+    "极简主义(minimalism)",
+    "极繁主义(maximalism)",
+    "新古典主义(neo-classicism)",
+    "粗野主义(brutalism)",
+    "包豪斯(bauhaus)",
+    "装饰艺术(art deco)",
+    "孟菲斯设计(memphis design)",
+    "波普艺术(pop art)",
+    "欧普艺术(op art)",
+    "抽象表现主义(abstract expressionism)",
+    "稚拙艺术(naive art)",
+    "迷幻艺术(psychedelic art)",
+    "故障艺术(glitch art)",
+    "Y2K千禧美学(y2k aesthetic)",
+    "梦核美学(dreamcore)"
   ],
-  "mutually_exclusive": false
+  "mutually_exclusive": false,
+  "conflicts": [
+    [
+      "极简主义(minimalism)",
+      "极繁主义(maximalism)"
+    ]
+  ]
 }

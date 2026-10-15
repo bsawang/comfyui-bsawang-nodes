@@ -21,7 +21,8 @@
     "像素风(pixel art)": "像素风(pixel art)：可见像素块、点阵纹理、8-bit/16-bit 复古、限色调板、锯齿边缘",
     "黑白素描": "黑白素描：铅笔/炭笔素描质感，线条与明暗塑造，无彩色。",
     "数字绘画(digital painting)": "数字绘画(digital painting)：数字板绘质感，干净笔触",
-    "二次元插画": "二次元插画：日系动漫插画质感，干净线稿、鲜明配色"
+    "二次元插画": "二次元插画：日系动漫插画质感，干净线稿、鲜明配色",
+    "拼贴艺术(collage)": "拼贴艺术(collage)：剪报与照片碎片拼贴、撕裂纸边、混合媒介叠层、不同材质并置、手工粘贴感"
   },
   "options": [
     "超写实(photorealistic)",
@@ -36,7 +37,8 @@
     "像素风(pixel art)",
     "黑白素描",
     "数字绘画(digital painting)",
-    "二次元插画"
+    "二次元插画",
+    "拼贴艺术(collage)"
   ],
   "mutually_exclusive": true,
   "conflicts": [
